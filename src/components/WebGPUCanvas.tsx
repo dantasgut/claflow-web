@@ -75,22 +75,22 @@ export function WebGPUCanvas() {
             scene.add(ground);
 
             // ── Pano XPBD (20×20 = 441 partículas, ~800 constraints) ─────
-            // Plano horizontal elevado a y=5; cai sob gravidade e colide
-            // com o chão (PlaneShape registrado em context.colliders).
-            // Os 4 cantos são fixados (invMass=0) → efeito de tenda/manta.
-            /*const SEGS     = 100;
+            // Elevado a y=10 — acima do bastão (y=6, h=4) e da esfera (y=5).
+            // Cai sob gravidade, drapa sobre os corpos rígidos e colide com o
+            // chão — permite validar que nenhum objeto atravessa o outro.
+            const SEGS     = 20;
             const clothGeo = new PlaneGeometry(6, 6, SEGS, SEGS);
             const clothBody = new SoftBody({
                 mass:           1.0,
                 compliance:     1e-5,
                 damping:        0.02,
                 particleRadius: 0.12,
-                offset:         [0, 5, -1],
+                offset:         [0, 10, -1],
                 targetGeometry: clothGeo,
             });
-            const cloth = new Mesh(clothGeo, new StandardMaterial({ color: [0.9, 0.2, 0.2, 1], roughness: 0.5 }));//new WireframeMaterial({ color: [0.3, 0.85, 1.0, 1] })
+            const cloth = new Mesh(clothGeo, new StandardMaterial({ color: [0.9, 0.2, 0.2, 1], roughness: 0.5 }));
             cloth.addPhysics(clothBody);
-            scene.add(cloth);*/
+            scene.add(cloth);
 
             // ── Bastão quase vertical (chão, lado esquerdo) ───────────────
             // Cai no chão com 12° de inclinação. O primeiro contato gera
