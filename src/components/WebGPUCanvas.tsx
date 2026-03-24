@@ -46,18 +46,42 @@ export function WebGPUCanvas() {
             sun.add(sunLight);
             scene.add(sun);
 
-            // ── Física ────────────────────────────────────────────────────
+            // ── Física — seleção de pipeline via ?mode=si|impulse|xpbd ──────
+            // SI (default):    Sequential Impulse — PGS k=10, warm start, estável
+            // impulse:         Impulse resolver — 1-pass, simples, menos estável em pilhas
+            // xpbd:            XPBD RigidBody — predict/solve/velocity-recovery, sem Baumgarte
+            const modeParam = new URLSearchParams(window.location.search).get('mode') ?? 'si';
+            const rigidResolutionType =
+                modeParam === 'xpbd'    ? ResolutionType.XPBD    :
+                modeParam === 'impulse' ? ResolutionType.IMPULSE  :
+                                         ResolutionType.SEQUENTIAL_IMPULSE;
+
+            // Config de corpo rígido — comum a todos os tipos
+            const rigidResolution = {
+                type:                rigidResolutionType,
+                restitution:         0.1,
+                restitutionThreshold: 1.5,
+                friction:            0.5,
+                // SI-specific
+                iterations:          10,
+                warmStarting:        true,
+                // XPBD-specific
+                compliance:          1e-4,
+                angularCorrectionScale: 0.0,
+            };
+
+            // Config de soft body — sempre XPBD, independente do pipeline rígido
+            const softBodyConfig = {
+                iterations:  15,
+                restitution: 0.05,
+            };
+
             const world = new PhysicsWorld({
                 collision: {
                     narrowphase: { boxBox: CollisionAlgorithmType.SAT },
                 },
-                rigidBody: {
-                    resolution: { type: ResolutionType.SEQUENTIAL_IMPULSE, compliance: 1e-4, iterations: 10, restitution: 0.1, restitutionThreshold: 1.5 },
-                },
-                softBody: {
-                    iterations: 15,
-                    restitution: 0.05,
-                },
+                rigidBody: { resolution: rigidResolution },
+                softBody:  softBodyConfig,
             });
             world.setSolver('RigidBody', new CPURigidBodySolver());
             world.setSolver('SoftBody', new XPBDSoftBodySolver());
@@ -78,14 +102,14 @@ export function WebGPUCanvas() {
             // Elevado a y=10 — acima do bastão (y=6, h=4) e da esfera (y=5).
             // Cai sob gravidade, drapa sobre os corpos rígidos e colide com o
             // chão — permite validar que nenhum objeto atravessa o outro.
-            const SEGS     = 20;
+            const SEGS = 20;
             const clothGeo = new PlaneGeometry(6, 6, SEGS, SEGS);
             const clothBody = new SoftBody({
-                mass:           1.0,
-                compliance:     1e-5,
-                damping:        0.02,
+                mass: 1.0,
+                compliance: 1e-5,
+                damping: 0.02,
                 particleRadius: 0.12,
-                offset:         [0, 10, -1],
+                offset: [0, 10, -1],
                 targetGeometry: clothGeo,
             });
             const cloth = new Mesh(clothGeo, new StandardMaterial({ color: [0.9, 0.2, 0.2, 1], roughness: 0.5 }));
