@@ -8,6 +8,7 @@ import {
     PhysicsWorld, RigidBody, SoftBody, SphereShape, BoxShape, PlaneShape,
     CPURigidBodySolver, XPBDSoftBodySolver, ConstantForce, CollisionAlgorithmType, ResolutionType,
     AmbientLight, DirectionalLight,
+    type ResolutionConfig, type SoftBodySimConfig,
 } from 'webgpu-engine';
 export function WebGPUCanvas() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -20,12 +21,7 @@ export function WebGPUCanvas() {
         let running = true;
 
         async function init() {
-            // ── Renderer ──────────────────────────────────────────────────
-            const renderer = new WebGPURenderer();
-            await renderer.initialize(canvas!);
-            renderer.setClearColor(0.08, 0.08, 0.12, 1.0);
-
-            // ── Câmera ────────────────────────────────────────────────────
+            // ── Câmera e cena ─────────────────────────────────────────────
             const scene = new Scene();
             const camera = new PerspectiveCamera(Math.PI / 4, canvas!.width / canvas!.height, 0.1, 100);
             camera.position[0] = 3;
@@ -46,46 +42,70 @@ export function WebGPUCanvas() {
             sun.add(sunLight);
             scene.add(sun);
 
-            // ── Física — seleção de pipeline via ?mode=si|impulse|xpbd ──────
-            // SI (default):    Sequential Impulse — PGS k=10, warm start, estável
-            // impulse:         Impulse resolver — 1-pass, simples, menos estável em pilhas
-            // xpbd:            XPBD RigidBody — predict/solve/velocity-recovery, sem Baumgarte
-            const modeParam = new URLSearchParams(window.location.search).get('mode') ?? 'si';
-            const rigidResolutionType =
-                modeParam === 'xpbd'    ? ResolutionType.XPBD    :
-                modeParam === 'impulse' ? ResolutionType.IMPULSE  :
-                                         ResolutionType.SEQUENTIAL_IMPULSE;
+            // ── Física — pipelines independentes para RigidBody e SoftBody ────
+            //
+            // RigidBody pipeline — selecionável via ?rb=si|impulse|xpbd|lcp
+            //   si (default):  Sequential Impulse — PGS k=10, warm start, estável em pilhas
+            //   impulse:       1-pass impulse resolver — simples, menos estável em empilhamento
+            //   xpbd:          Position-Based (XPBD) — predict/solve/velocity-recovery
+            //   lcp:           PGS-LCP GPU — formulação formal LCP com warm start e Baumgarte
+            //
+            // SoftBody pipeline — sempre XPBD (único backend implementado)
+            //   Independente do pipeline rígido. Futuros backends: GPU spring-mass, FEM, MPM.
 
-            // Config de corpo rígido — comum a todos os tipos
-            const rigidResolution = {
-                type:                rigidResolutionType,
-                restitution:         0.1,
+            const params   = new URLSearchParams(window.location.search);
+            const rbParam  = params.get('rb') ?? 'si';
+            const profilerInterval = parseInt(params.get('profilerInterval') ?? '60', 10);
+            const rigidResolutionType: ResolutionType =
+                rbParam === 'xpbd'    ? ResolutionType.XPBD :
+                rbParam === 'impulse' ? ResolutionType.IMPULSE :
+                rbParam === 'lcp'     ? ResolutionType.LCP :
+                                        ResolutionType.SEQUENTIAL_IMPULSE;
+
+            // ── Pipeline RigidBody ────────────────────────────────────────────
+            const rigidResolution: ResolutionConfig = {
+                type: rigidResolutionType,
+                restitution: 0.1,
                 restitutionThreshold: 1.5,
-                friction:            0.5,
-                // SI-specific
-                iterations:          10,
-                warmStarting:        true,
-                // XPBD-specific
-                compliance:          1e-4,
-                angularCorrectionScale: 0.0,
+                friction: 0.5,
+                // SI: iterações PGS + warm start
+                iterations: 10,
+                warmStarting: true,
+                // XPBD: compliance da constraint de contato + escala de correção angular
+                compliance: 1e-4,
+                // 0.1: correção angular suave — estabiliza contatos face-chão durante
+                // tombamento sem travar o bastão na vertical (0=livre demais, 1=trava).
+                angularCorrectionScale: 0.1,
             };
 
-            // Config de soft body — sempre XPBD, independente do pipeline rígido
-            const softBodyConfig = {
-                iterations:  15,
+            // ── Pipeline SoftBody — GPU compute XPBD ─────────────────────────
+            const softBodyConfig: SoftBodySimConfig = {
+                resolution: { type: ResolutionType.XPBD },
+                iterations: 15,
+                backend: 'gpu',
                 restitution: 0.05,
             };
 
             const world = new PhysicsWorld({
                 collision: {
                     narrowphase: { boxBox: CollisionAlgorithmType.SAT },
+                    // Contatos especulativos: detecta colisão na posição prevista
+                    // para corpos rápidos, prevenindo tunneling do bastão ao tombar.
+                    predictiveContacts: true,
+                    predictiveContactsThreshold: 2.0,
                 },
-                rigidBody: { resolution: rigidResolution },
-                softBody:  softBodyConfig,
+                rigidBody: { resolution: rigidResolution, backend: 'gpu', profilerLogInterval: profilerInterval },
+                softBody: { ...softBodyConfig, profilerLogInterval: profilerInterval },
             });
             world.setSolver('RigidBody', new CPURigidBodySolver());
             world.setSolver('SoftBody', new XPBDSoftBodySolver());
             world.addForce(new ConstantForce('gravity', new Float32Array([0, -9.81, 0])));
+
+            // ── Renderer — recebe o mundo GPU para que encodeSyncPasses funcione ──
+            // O renderer chama world.step() internamente; não chamar world.step() no tick.
+            const renderer = new WebGPURenderer(world);
+            await renderer.initialize(canvas!);
+            renderer.setClearColor(0.08, 0.08, 0.12, 1.0);
 
             // ── Chão finito 12×12 ─────────────────────────────────────────
             // PlaneShape(normal, offset, halfWidth, halfDepth) respeita limites.
@@ -186,13 +206,9 @@ export function WebGPUCanvas() {
             onResize();
 
             // ── Game loop ─────────────────────────────────────────────────
-            let lastTime = performance.now();
             const tick = async () => {
                 if (!running) return;
-                const now = performance.now();
-                const dt = Math.min((now - lastTime) / 1000, 0.05); // máx 50ms para evitar tunneling
-                lastTime = now;
-                world.step(scene, dt);
+                // Renderer gerencia dt e world.step() internamente — não chamar world.step() aqui
                 await renderer.render(scene, camera);
                 rafId = requestAnimationFrame(tick);
             };
