@@ -30,10 +30,10 @@ interface GelMesh {
 }
 
 const GEL_MATERIAL: GelMaterial = {
-    youngsModulus:   1500,   // E = 1.5 kPa — gelatina de sobremesa
-    poissonsRatio:   0.45,   // ν — quase incompressível
+    youngsModulus:   8000,   // E = 8 kPa — gelatina firme, menos propensa a inversão
+    poissonsRatio:   0.40,   // ν — quase incompressível (reduzido para estabilidade)
     mass:            5.0,    // kg
-    damping:         0.04,
+    damping:         0.15,   // amortecimento alto evita oscilações explosivas
     collisionRadius: 0.03,   // margem de contato com o chão (m)
     restitution:     0.02,
 };
@@ -97,8 +97,8 @@ export function WebGPUCanvas() {
                     profilerLogInterval: profilerInterval,
                 },
                 fem: {
-                    substeps: 8,
-                    iterations: 10,
+                    substeps: 20,
+                    iterations: 20,
                 },
             });
             world.addForce(new ConstantForce('gravity', new Float32Array([0, -9.81, 0])));
