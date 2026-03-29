@@ -5,11 +5,49 @@ import {
     BoxGeometry, SphereGeometry, PlaneGeometry,
     StandardMaterial, WireframeMaterial,
     WebGPURenderer,
-    PhysicsWorld, RigidBody, SoftBody, SphereShape, BoxShape, PlaneShape,
-    CPURigidBodySolver, XPBDSoftBodySolver, ConstantForce, CollisionAlgorithmType, ResolutionType,
+    PhysicsWorld, RigidBody, SphereShape, BoxShape, PlaneShape,
+    ConstantForce,
     AmbientLight, DirectionalLight,
-    type ResolutionConfig, type SoftBodySimConfig,
+    FEMBody, FEMBoxGeometry, boxToFEMBody,
 } from 'webgpu-engine';
+
+// ── Contratos da gelatina (parametrizações locais do App) ─────────────────────
+
+interface GelMaterial {
+    youngsModulus: number;
+    poissonsRatio: number;
+    mass: number;
+    damping: number;
+    collisionRadius: number;
+    restitution: number;
+}
+
+interface GelMesh {
+    width: number; height: number; depth: number;
+    cellsX: number; cellsY: number; cellsZ: number;
+    color: [number, number, number, number];
+    roughness: number;
+}
+
+const GEL_MATERIAL: GelMaterial = {
+    youngsModulus:   1500,   // E = 1.5 kPa — gelatina de sobremesa
+    poissonsRatio:   0.45,   // ν — quase incompressível
+    mass:            5.0,    // kg
+    damping:         0.04,
+    collisionRadius: 0.03,   // margem de contato com o chão (m)
+    restitution:     0.02,
+};
+
+const GEL_MESH: GelMesh = {
+    width:    3.0,
+    height:   1.0,
+    depth:    3.0,
+    cellsX:   6,    // → 7×3×7 = 147 nós, 432 tetraedros
+    cellsY:   2,
+    cellsZ:   6,
+    color:    [0.2, 0.4, 0.9, 1.0],  // azul original da plataforma
+    roughness: 0.3,
+};
 export function WebGPUCanvas() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -42,63 +80,27 @@ export function WebGPUCanvas() {
             sun.add(sunLight);
             scene.add(sun);
 
-            // ── Física — pipelines independentes para RigidBody e SoftBody ────
-            //
-            // RigidBody pipeline — selecionável via ?rb=si|impulse|xpbd|lcp
-            //   si (default):  Sequential Impulse — PGS k=10, warm start, estável em pilhas
-            //   impulse:       1-pass impulse resolver — simples, menos estável em empilhamento
-            //   xpbd:          Position-Based (XPBD) — predict/solve/velocity-recovery
-            //   lcp:           PGS-LCP GPU — formulação formal LCP com warm start e Baumgarte
-            //
-            // SoftBody pipeline — sempre XPBD (único backend implementado)
-            //   Independente do pipeline rígido. Futuros backends: GPU spring-mass, FEM, MPM.
-
-            const params   = new URLSearchParams(window.location.search);
-            const rbParam  = params.get('rb') ?? 'si';
+            // ── Física GPU-only ───────────────────────────────────────────────
+            const params = new URLSearchParams(window.location.search);
             const profilerInterval = parseInt(params.get('profilerInterval') ?? '60', 10);
-            const rigidResolutionType: ResolutionType =
-                rbParam === 'xpbd'    ? ResolutionType.XPBD :
-                rbParam === 'impulse' ? ResolutionType.IMPULSE :
-                rbParam === 'lcp'     ? ResolutionType.LCP :
-                                        ResolutionType.SEQUENTIAL_IMPULSE;
-
-            // ── Pipeline RigidBody ────────────────────────────────────────────
-            const rigidResolution: ResolutionConfig = {
-                type: rigidResolutionType,
-                restitution: 0.1,
-                restitutionThreshold: 1.5,
-                friction: 0.5,
-                // SI: iterações PGS + warm start
-                iterations: 10,
-                warmStarting: true,
-                // XPBD: compliance da constraint de contato + escala de correção angular
-                compliance: 1e-4,
-                // 0.1: correção angular suave — estabiliza contatos face-chão durante
-                // tombamento sem travar o bastão na vertical (0=livre demais, 1=trava).
-                angularCorrectionScale: 0.1,
-            };
-
-            // ── Pipeline SoftBody — GPU compute XPBD ─────────────────────────
-            const softBodyConfig: SoftBodySimConfig = {
-                resolution: { type: ResolutionType.XPBD },
-                iterations: 15,
-                backend: 'gpu',
-                restitution: 0.05,
-            };
 
             const world = new PhysicsWorld({
-                collision: {
-                    narrowphase: { boxBox: CollisionAlgorithmType.SAT },
-                    // Contatos especulativos: detecta colisão na posição prevista
-                    // para corpos rápidos, prevenindo tunneling do bastão ao tombar.
-                    predictiveContacts: true,
-                    predictiveContactsThreshold: 2.0,
+                substeps: 4,
+                rigidBody: {
+                    iterations: 10,
+                    restitutionThreshold: 2.0,
+                    profilerLogInterval: profilerInterval,
                 },
-                rigidBody: { resolution: rigidResolution, backend: 'gpu', profilerLogInterval: profilerInterval },
-                softBody: { ...softBodyConfig, profilerLogInterval: profilerInterval },
+                softBody: {
+                    iterations: 15,
+                    restitution: 0.05,
+                    profilerLogInterval: profilerInterval,
+                },
+                fem: {
+                    substeps: 8,
+                    iterations: 10,
+                },
             });
-            world.setSolver('RigidBody', new CPURigidBodySolver());
-            world.setSolver('SoftBody', new XPBDSoftBodySolver());
             world.addForce(new ConstantForce('gravity', new Float32Array([0, -9.81, 0])));
 
             // ── Renderer — recebe o mundo GPU para que encodeSyncPasses funcione ──
@@ -114,7 +116,7 @@ export function WebGPUCanvas() {
                 new PlaneGeometry(12, 12),
                 new StandardMaterial({ color: [0.25, 0.25, 0.30, 1] }),
             );
-            ground.addPhysics(new RigidBody({ mass: 0, friction: 0.8, isKinematic: true }));
+            ground.addPhysics(new RigidBody({ mass: 1.0, friction: 0.8, isKinematic: true }));
             ground.addPhysics(new PlaneShape([0, 1, 0], 0, 6, 6));
             scene.add(ground);
 
@@ -122,7 +124,7 @@ export function WebGPUCanvas() {
             // Elevado a y=10 — acima do bastão (y=6, h=4) e da esfera (y=5).
             // Cai sob gravidade, drapa sobre os corpos rígidos e colide com o
             // chão — permite validar que nenhum objeto atravessa o outro.
-            const SEGS = 20;
+            /*const SEGS = 20;
             const clothGeo = new PlaneGeometry(6, 6, SEGS, SEGS);
             const clothBody = new SoftBody({
                 mass: 1.0,
@@ -134,7 +136,7 @@ export function WebGPUCanvas() {
             });
             const cloth = new Mesh(clothGeo, new StandardMaterial({ color: [0.9, 0.2, 0.2, 1], roughness: 0.5 }));
             cloth.addPhysics(clothBody);
-            scene.add(cloth);
+            scene.add(cloth);*/
 
             // ── Bastão quase vertical (chão, lado esquerdo) ───────────────
             // Cai no chão com 12° de inclinação. O primeiro contato gera
@@ -150,7 +152,7 @@ export function WebGPUCanvas() {
             bastao.position[2] = -1;
             bastao.rotation[2] = Math.sin(anguloBastao / 2);
             bastao.rotation[3] = Math.cos(anguloBastao / 2);
-            bastao.addPhysics(new RigidBody({ mass: 1.0, friction: 0.2, linearDamping: 0.01, angularDamping: 0.4 }));
+            bastao.addPhysics(new RigidBody({ mass: 1.0, friction: 0.2, linearDamping: 0.05, angularDamping: 0.4 }));
             bastao.addPhysics(new BoxShape(0.2, 2.0, 0.2));
             scene.add(bastao);
 
@@ -167,7 +169,7 @@ export function WebGPUCanvas() {
             cubo.position[2] = -1.0;
             cubo.rotation[2] = Math.sin(anguloCubo / 2);
             cubo.rotation[3] = Math.cos(anguloCubo / 2);
-            cubo.addPhysics(new RigidBody({ mass: 1.0, friction: 0.8, linearDamping: 0.01, angularDamping: 0.4 }));
+            cubo.addPhysics(new RigidBody({ mass: 1.0, friction: 0.8, linearDamping: 0.05, angularDamping: 0.4 }));
             cubo.addPhysics(new BoxShape(0.5, 0.5, 0.5));
             scene.add(cubo);
 
@@ -180,19 +182,46 @@ export function WebGPUCanvas() {
             esfera.position[0] = 1.0;
             esfera.position[1] = 5.0;
             esfera.position[2] = -1.0;
-            esfera.addPhysics(new RigidBody({ mass: 1.2, friction: 0.4, linearDamping: 0.01, angularDamping: 0.4 }));
+            esfera.addPhysics(new RigidBody({ mass: 1.2, friction: 0.4, linearDamping: 0.05, angularDamping: 0.4 }));
             esfera.addPhysics(new SphereShape(0.5));
             scene.add(esfera);
 
-            // ── Cubo azul estático ────────────────────────────────────────
-            const platform = new Mesh(
-                new BoxGeometry(3, 1, 3),
-                new StandardMaterial({ color: [0.2, 0.4, 0.9, 1], roughness: 0.6 }),
+            // ── Plataforma gelatina FEM ───────────────────────────────────
+            const { youngsModulus: E, poissonsRatio: nu } = GEL_MATERIAL;
+            const mu     = E / (2 * (1 + nu));
+            const lambda = E * nu / ((1 + nu) * (1 - 2 * nu));
+
+            const gelGeo = new FEMBoxGeometry(
+                GEL_MESH.width, GEL_MESH.height, GEL_MESH.depth,
+                GEL_MESH.cellsX, GEL_MESH.cellsY, GEL_MESH.cellsZ,
+                0,    // offsetX
+                0.5,  // offsetY — base em y=0.5, superfície superior em y=1.5
+                -1,   // offsetZ
             );
-            platform.position[1] = 0.5;
-            platform.position[2] = -1;
-            platform.addPhysics(new RigidBody({ mass: 0, isKinematic: true }));
-            platform.addPhysics(new BoxShape(1.5, 0.5, 1.5));
+
+            const platform = new Mesh(
+                gelGeo,
+                new StandardMaterial({ color: GEL_MESH.color, roughness: GEL_MESH.roughness }),
+            );
+
+            const gelBody = new FEMBody({
+                mass:            GEL_MATERIAL.mass,
+                mu,
+                lambda,
+                damping:         GEL_MATERIAL.damping,
+                collisionRadius: GEL_MATERIAL.collisionRadius,
+                restitution:     GEL_MATERIAL.restitution,
+            });
+
+            const { nodes, elements } = boxToFEMBody(
+                GEL_MESH.width, GEL_MESH.height, GEL_MESH.depth,
+                GEL_MESH.cellsX, GEL_MESH.cellsY, GEL_MESH.cellsZ,
+                { offsetX: 0, offsetY: 0.5, offsetZ: -1, pinnedBottom: true },
+            );
+            gelBody.nodes    = nodes;
+            gelBody.elements = elements;
+
+            platform.addPhysics(gelBody);
             scene.add(platform);
 
             // ── Resize ────────────────────────────────────────────────────
