@@ -8,46 +8,8 @@ import {
     PhysicsWorld, RigidBody, SphereShape, BoxShape, PlaneShape,
     ConstantForce,
     AmbientLight, DirectionalLight,
-    FEMBody, FEMBoxGeometry, boxToFEMBody,
 } from 'webgpu-engine';
 
-// ── Contratos da gelatina (parametrizações locais do App) ─────────────────────
-
-interface GelMaterial {
-    youngsModulus: number;
-    poissonsRatio: number;
-    mass: number;
-    damping: number;
-    collisionRadius: number;
-    restitution: number;
-}
-
-interface GelMesh {
-    width: number; height: number; depth: number;
-    cellsX: number; cellsY: number; cellsZ: number;
-    color: [number, number, number, number];
-    roughness: number;
-}
-
-const GEL_MATERIAL: GelMaterial = {
-    youngsModulus:   8000,   // E = 8 kPa — gelatina firme, menos propensa a inversão
-    poissonsRatio:   0.40,   // ν — quase incompressível (reduzido para estabilidade)
-    mass:            5.0,    // kg
-    damping:         0.15,   // amortecimento alto evita oscilações explosivas
-    collisionRadius: 0.03,   // margem de contato com o chão (m)
-    restitution:     0.02,
-};
-
-const GEL_MESH: GelMesh = {
-    width:    3.0,
-    height:   1.0,
-    depth:    3.0,
-    cellsX:   6,    // → 7×3×7 = 147 nós, 432 tetraedros
-    cellsY:   2,
-    cellsZ:   6,
-    color:    [0.2, 0.4, 0.9, 1.0],  // azul original da plataforma
-    roughness: 0.3,
-};
 export function WebGPUCanvas() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -85,10 +47,12 @@ export function WebGPUCanvas() {
             const profilerInterval = parseInt(params.get('profilerInterval') ?? '60', 10);
 
             const world = new PhysicsWorld({
-                substeps: 4,
+                substeps: 8,
                 rigidBody: {
                     iterations: 10,
-                    restitutionThreshold: 2.0,
+                    restitutionThreshold: 0.5,   // quica a partir de 0.5 m/s de aproximação
+                    baumgarteBeta: 0.1,           // menor beta → menos oscilação ao repousar
+                    sleepLinThreshold: 0.1,       // dorme a 0.1 m/s — elimina oscilação residual
                     profilerLogInterval: profilerInterval,
                 },
                 softBody: {
@@ -152,7 +116,7 @@ export function WebGPUCanvas() {
             bastao.position[2] = -1;
             bastao.rotation[2] = Math.sin(anguloBastao / 2);
             bastao.rotation[3] = Math.cos(anguloBastao / 2);
-            bastao.addPhysics(new RigidBody({ mass: 1.0, friction: 0.2, linearDamping: 0.05, angularDamping: 0.4 }));
+            bastao.addPhysics(new RigidBody({ mass: 1.0, friction: 0.2, restitution: 0.4, linearDamping: 0.05, angularDamping: 0.4 }));
             bastao.addPhysics(new BoxShape(0.2, 2.0, 0.2));
             scene.add(bastao);
 
@@ -169,7 +133,7 @@ export function WebGPUCanvas() {
             cubo.position[2] = -1.0;
             cubo.rotation[2] = Math.sin(anguloCubo / 2);
             cubo.rotation[3] = Math.cos(anguloCubo / 2);
-            cubo.addPhysics(new RigidBody({ mass: 1.0, friction: 0.8, linearDamping: 0.05, angularDamping: 0.4 }));
+            cubo.addPhysics(new RigidBody({ mass: 1.0, friction: 0.8, restitution: 0.3, linearDamping: 0.05, angularDamping: 0.1 }));
             cubo.addPhysics(new BoxShape(0.5, 0.5, 0.5));
             scene.add(cubo);
 
@@ -181,14 +145,14 @@ export function WebGPUCanvas() {
             );
             esfera.position[0] = 1.0;
             esfera.position[1] = 5.0;
-            esfera.position[2] = -1.0;
-            esfera.addPhysics(new RigidBody({ mass: 1.2, friction: 0.4, linearDamping: 0.05, angularDamping: 0.4 }));
+            esfera.position[2] = 3.0;  // separada de bastão/cubo (z=-1) para não ser empurrada
+            esfera.addPhysics(new RigidBody({ mass: 1.2, friction: 0.4, restitution: 0.5, linearDamping: 0.05, angularDamping: 0.4 }));
             esfera.addPhysics(new SphereShape(0.5));
             scene.add(esfera);
 
             // ── Plataforma gelatina FEM ───────────────────────────────────
-            const { youngsModulus: E, poissonsRatio: nu } = GEL_MATERIAL;
-            const mu     = E / (2 * (1 + nu));
+            /*const { youngsModulus: E, poissonsRatio: nu } = GEL_MATERIAL;
+            const mu = E / (2 * (1 + nu));
             const lambda = E * nu / ((1 + nu) * (1 - 2 * nu));
 
             const gelGeo = new FEMBoxGeometry(
@@ -205,12 +169,12 @@ export function WebGPUCanvas() {
             );
 
             const gelBody = new FEMBody({
-                mass:            GEL_MATERIAL.mass,
+                mass: GEL_MATERIAL.mass,
                 mu,
                 lambda,
-                damping:         GEL_MATERIAL.damping,
+                damping: GEL_MATERIAL.damping,
                 collisionRadius: GEL_MATERIAL.collisionRadius,
-                restitution:     GEL_MATERIAL.restitution,
+                restitution: GEL_MATERIAL.restitution,
             });
 
             const { nodes, elements } = boxToFEMBody(
@@ -220,11 +184,11 @@ export function WebGPUCanvas() {
                 // O FEM collision kernel cuida do contato com a PlaneShape.
                 { offsetX: 0, offsetY: 0.02, offsetZ: -1 },
             );
-            gelBody.nodes    = nodes;
+            gelBody.nodes = nodes;
             gelBody.elements = elements;
 
             platform.addPhysics(gelBody);
-            scene.add(platform);
+            scene.add(platform);*/
 
             // ── Resize ────────────────────────────────────────────────────
             const onResize = () => {
