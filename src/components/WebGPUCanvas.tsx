@@ -194,9 +194,9 @@ export function WebGPUCanvas() {
             const gelGeo = new FEMBoxGeometry(
                 GEL_MESH.width, GEL_MESH.height, GEL_MESH.depth,
                 GEL_MESH.cellsX, GEL_MESH.cellsY, GEL_MESH.cellsZ,
-                0,    // offsetX
-                0.5,  // offsetY — base em y=0.5, superfície superior em y=1.5
-                -1,   // offsetZ
+                0,     // offsetX
+                0.02,  // offsetY — base em y=0.02 (quase no chão), impacto mínimo
+                -1,    // offsetZ
             );
 
             const platform = new Mesh(
@@ -216,7 +216,9 @@ export function WebGPUCanvas() {
             const { nodes, elements } = boxToFEMBody(
                 GEL_MESH.width, GEL_MESH.height, GEL_MESH.depth,
                 GEL_MESH.cellsX, GEL_MESH.cellsY, GEL_MESH.cellsZ,
-                { offsetX: 0, offsetY: 0.5, offsetZ: -1, pinnedBottom: true },
+                // Sem pinnedBottom: todos os nós livres caem até o chão.
+                // O FEM collision kernel cuida do contato com a PlaneShape.
+                { offsetX: 0, offsetY: 0.02, offsetZ: -1 },
             );
             gelBody.nodes    = nodes;
             gelBody.elements = elements;
