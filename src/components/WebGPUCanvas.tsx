@@ -2,10 +2,12 @@ import { useEffect, useRef } from 'react';
 import {
     Scene, Mesh, Entity,
     PerspectiveCamera,
-    BoxGeometry, SphereGeometry, PlaneGeometry,
+    BoxGeometry, SphereGeometry, PlaneGeometry, PointCloudGeometry,
     StandardMaterial, WireframeMaterial,
     WebGPURenderer,
     PhysicsWorld, RigidBody, SphereShape, BoxShape, PlaneShape,
+    MPMBody,
+    type MPMParticleData,
     ConstantForce,
     AmbientLight, DirectionalLight,
 } from 'webgpu-engine';
@@ -24,9 +26,9 @@ export function WebGPUCanvas() {
             // ── Câmera e cena ─────────────────────────────────────────────
             const scene = new Scene();
             const camera = new PerspectiveCamera(Math.PI / 4, canvas!.width / canvas!.height, 0.1, 100);
-            camera.position[0] = 3;
-            camera.position[1] = 5;
-            camera.position[2] = 12;
+            camera.position[0] = 1;
+            camera.position[1] = 1.5;
+            camera.position[2] = 11;
             scene.add(camera);
 
             // ── Luzes ─────────────────────────────────────────────────────
@@ -63,6 +65,12 @@ export function WebGPUCanvas() {
                 fem: {
                     substeps: 20,
                     iterations: 20,
+                },
+                mpm: {
+                    substeps: 20,
+                    gridDims:    [32, 32, 32],
+                    gridCellSize: 12 / 32,    // 0.375 m/célula → grade 12×12×12 m
+                    gridOrigin:  [-6, -1, -6],
                 },
             });
             world.addForce(new ConstantForce('gravity', new Float32Array([0, -9.81, 0])));
@@ -189,6 +197,33 @@ export function WebGPUCanvas() {
 
             platform.addPhysics(gelBody);
             scene.add(platform);*/
+
+            // ── Neve MPM ──────────────────────────────────────────────────
+            // 800 partículas de neve caindo de y=8-10, espalhadas em x/z [-4,4].
+            // O MPMComputePass simula via MLS-MPM (snow: hardening, thetaC, thetaS).
+            // Renderizado como point-list — cada partícula = 1 px branco-azulado.
+            const SNOW_COUNT = 800;
+            const snowParticles: MPMParticleData[] = [];
+            for (let i = 0; i < SNOW_COUNT; i++) {
+                snowParticles.push({
+                    x:  (Math.random() - 0.5) * 8,
+                    y:  8 + Math.random() * 2,
+                    z:  (Math.random() - 0.5) * 8,
+                    vx: (Math.random() - 0.5) * 0.3,
+                    vy: -0.3 - Math.random() * 0.4,
+                    vz: (Math.random() - 0.5) * 0.3,
+                });
+            }
+
+            const snowGeo = new PointCloudGeometry(SNOW_COUNT);
+            const snowMat = new StandardMaterial({ color: [0.88, 0.93, 1.0, 1], roughness: 0.9 });
+            snowMat.topology = 'point-list';
+
+            const snow = new Mesh(snowGeo, snowMat);
+            const snowBody = new MPMBody({ material: 'snow', E: 1.4e5, nu: 0.2 });
+            snowBody.particles = snowParticles;
+            snow.addPhysics(snowBody);
+            scene.add(snow);
 
             // ── Resize ────────────────────────────────────────────────────
             const onResize = () => {
