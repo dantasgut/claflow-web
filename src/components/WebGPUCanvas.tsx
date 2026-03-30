@@ -24,9 +24,9 @@ export function WebGPUCanvas() {
             // ── Câmera e cena ─────────────────────────────────────────────
             const scene = new Scene();
             const camera = new PerspectiveCamera(Math.PI / 4, canvas!.width / canvas!.height, 0.1, 100);
-            camera.position[0] = 3;
-            camera.position[1] = 5;
-            camera.position[2] = 12;
+            camera.position[0] = 1;
+            camera.position[1] = 1.5;
+            camera.position[2] = 11;
             scene.add(camera);
 
             // ── Luzes ─────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ export function WebGPUCanvas() {
             bastao.position[2] = -1;
             bastao.rotation[2] = Math.sin(anguloBastao / 2);
             bastao.rotation[3] = Math.cos(anguloBastao / 2);
-            bastao.addPhysics(new RigidBody({ mass: 1.0, friction: 0.2, restitution: 0.4, linearDamping: 0.05, angularDamping: 0.05 }));
+            bastao.addPhysics(new RigidBody({ mass: 1.0, friction: 0.2, restitution: 0.4, linearDamping: 0.05, angularDamping: 0.4 }));
             bastao.addPhysics(new BoxShape(0.2, 2.0, 0.2));
             scene.add(bastao);
 
