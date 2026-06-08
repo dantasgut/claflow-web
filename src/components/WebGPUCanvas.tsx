@@ -1,16 +1,20 @@
 import { useEffect, useRef } from 'react';
 import {
-    Scene, Mesh, Entity,
-    PerspectiveCamera,
-    BoxGeometry, SphereGeometry, PlaneGeometry, PointCloudGeometry,
-    StandardMaterial, WireframeMaterial,
-    WebGPURenderer,
-    PhysicsWorld, RigidBody, SphereShape, BoxShape, PlaneShape,
-    MPMBody,
-    type MPMParticleData,
-    ConstantForce,
-    AmbientLight, DirectionalLight,
+    Application, OrbitController, InteractionSystem,
+    Bloom, ToneMapping, Fxaa, Vignette,
 } from 'webgpu-engine';
+import {
+    BoxGeometry, SphereGeometry, PlaneGeometry,
+    BoxCollider, PlaneCollider, SphereCollider,
+    Camera, DirectionalLight, GravityField,
+    LCPFlow, RigidBody, LCPSchema,
+    StandardMaterial, Transform,
+} from 'webgpu-engine';
+
+const FLOOR_Y = -0.5;
+const PLATFORM_Y = 0;
+const BALL_RADIUS = 0.4;
+const BAT_HALF_HEIGHT = 0.75;
 
 export function WebGPUCanvas() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -19,247 +23,107 @@ export function WebGPUCanvas() {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        let rafId = 0;
-        let running = true;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(canvas.clientWidth * dpr);
+        canvas.height = Math.floor(canvas.clientHeight * dpr);
 
-        async function init() {
-            // ── Câmera e cena ─────────────────────────────────────────────
-            const scene = new Scene();
-            const camera = new PerspectiveCamera(Math.PI / 4, canvas!.width / canvas!.height, 0.1, 100);
-            camera.position[0] = 1;
-            camera.position[1] = 1.5;
-            camera.position[2] = 11;
-            scene.add(camera);
+        let app: Application | null = null;
+        let interaction: InteractionSystem | null = null;
+        let cancelled = false;
 
-            // ── Luzes ─────────────────────────────────────────────────────
-            const ambient = new Entity();
-            ambient.add(new AmbientLight([1, 1, 1], 0.2));
-            scene.add(ambient);
+        (async () => {
+            const a = await Application.create({ canvas });
+            if (cancelled) { a.dispose?.(); return; }
+            app = a;
 
-            const sun = new Entity();
-            const sunLight = new DirectionalLight([1.0, 0.95, 0.85], 1.2);
-            sunLight.direction[0] = 0.5;
-            sunLight.direction[1] = -1.0;
-            sunLight.direction[2] = -0.3;
-            sun.add(sunLight);
-            scene.add(sun);
+            const camera = new Camera({ aspect: canvas.width / canvas.height });
+            a.world.insert(camera);
 
-            // ── Física GPU-only ───────────────────────────────────────────────
-            const params = new URLSearchParams(window.location.search);
-            const profilerInterval = parseInt(params.get('profilerInterval') ?? '60', 10);
+            interaction = new InteractionSystem({ canvas, window }, a.events);
+            interaction.attach();
+            interaction.addController(new OrbitController(camera, {
+                target: [0, 1, 0], distance: 8,
+                autoRotate: true, autoRotateSpeed: 0.3,
+                damping: 0.85,
+            }));
 
-            const world = new PhysicsWorld({
-                substeps: 8,
-                rigidBody: {
-                    iterations: 10,
-                    restitutionThreshold: 0.5,   // quica a partir de 0.5 m/s de aproximação
-                    baumgarteBeta: 0.1,           // menor beta → menos oscilação ao repousar
-                    sleepLinThreshold: 0.1,       // dorme a 0.1 m/s — elimina oscilação residual
-                    profilerLogInterval: profilerInterval,
+            a.world.insert(new DirectionalLight({
+                direction: [0.4, -1, 0.6, 0],
+                color: [1, 1, 0.95, 1],
+                castShadow: true,
+            }));
+
+            const floor = new PlaneGeometry({ size: [12, 12] });
+            floor.add(new StandardMaterial({ albedo: [0.35, 0.35, 0.4, 1], roughness: 0.95 }));
+            floor.add(new Transform({ position: [0, FLOOR_Y, 0, 1] }));
+            floor.add(new PlaneCollider({ normal: [0, 1, 0, 0], offset: FLOOR_Y }));
+            a.world.insert(floor);
+
+            const platformHalf: [number, number, number, number] = [1.5, 0.15, 1.5, 0];
+            const platform = new BoxGeometry({ size: [3, 0.3, 3] });
+            platform.add(new StandardMaterial({ albedo: [0.55, 0.4, 0.25, 1], roughness: 0.7 }));
+            platform.add(new Transform({ position: [0, PLATFORM_Y, 0, 1] }));
+            platform.add(new BoxCollider({ halfExtents: platformHalf, center: [0, 0, 0, 1] }));
+            a.world.insert(platform);
+
+            const ball = new SphereGeometry({ radius: BALL_RADIUS, latSegments: 24, lonSegments: 32 });
+            ball.add(new StandardMaterial({ albedo: [0.9, 0.25, 0.25, 1], roughness: 0.35 }));
+            ball.add(new Transform({ position: [-0.4, 4, 0, 1] }));
+            ball.add(new RigidBody({
+                schema: LCPSchema,
+                data: {
+                    pos: [-0.4, 4, 0, 1.0],
+                    rot: [0, 0, 0, 1],
+                    rot_pred: [0, 0, 0, 1],
+                    I_inv: [1, 1, 1, 0],
+                    mat_props: [0.45, 0.3, 0.05, 0.05],
+                    body_shape: [0, BALL_RADIUS, BALL_RADIUS, BALL_RADIUS],
                 },
-                softBody: {
-                    iterations: 15,
-                    restitution: 0.05,
-                    profilerLogInterval: profilerInterval,
+            }));
+            ball.add(new SphereCollider({ radius: BALL_RADIUS, center: [0, 0, 0, 1] }));
+            a.world.insert(ball);
+
+            const batHalf: [number, number, number, number] = [0.075, BAT_HALF_HEIGHT, 0.075, 0];
+            const bat = new BoxGeometry({ size: [0.15, BAT_HALF_HEIGHT * 2, 0.15] });
+            bat.add(new StandardMaterial({ albedo: [0.85, 0.75, 0.4, 1], roughness: 0.4 }));
+            bat.add(new Transform({ position: [0.6, 5.5, 0, 1] }));
+            bat.add(new RigidBody({
+                schema: LCPSchema,
+                data: {
+                    pos: [0.6, 5.5, 0, 0.8],
+                    rot: [0, 0, 0, 1],
+                    rot_pred: [0, 0, 0, 1],
+                    I_inv: [1, 1, 1, 0],
+                    mat_props: [0.3, 0.4, 0.05, 0.1],
+                    body_shape: [1, batHalf[0], batHalf[1], batHalf[2]],
                 },
-                fem: {
-                    substeps: 20,
-                    iterations: 20,
-                },
-                mpm: {
-                    substeps: 20,
-                    gridDims:    [32, 32, 32],
-                    gridCellSize: 12 / 32,    // 0.375 m/célula → grade 12×12×12 m
-                    gridOrigin:  [-6, -1, -6],
-                },
-            });
-            world.addForce(new ConstantForce('gravity', new Float32Array([0, -9.81, 0])));
+            }));
+            bat.add(new BoxCollider({ halfExtents: batHalf, center: [0, 0, 0, 1] }));
+            a.world.insert(bat);
 
-            // ── Renderer — recebe o mundo GPU para que encodeSyncPasses funcione ──
-            // O renderer chama world.step() internamente; não chamar world.step() no tick.
-            const renderer = new WebGPURenderer(world);
-            await renderer.initialize(canvas!);
-            renderer.setClearColor(0.08, 0.08, 0.12, 1.0);
+            a.world.insert(new GravityField({ acceleration: [0, -9.81, 0, 0] }));
+            a.flows.register(new LCPFlow(a.core, a.world, a.resources));
 
-            // ── Chão finito 12×12 ─────────────────────────────────────────
-            // PlaneShape(normal, offset, halfWidth, halfDepth) respeita limites.
-            // Objetos fora de ±6 em X ou Z caem no vazio.
-            const ground = new Mesh(
-                new PlaneGeometry(12, 12),
-                new StandardMaterial({ color: [0.25, 0.25, 0.30, 1] }),
-            );
-            ground.addPhysics(new RigidBody({ mass: 1.0, friction: 0.8, isKinematic: true }));
-            ground.addPhysics(new PlaneShape([0, 1, 0], 0, 6, 6));
-            scene.add(ground);
+            a.defaults.post.addEffect(new ToneMapping({ strength: 1.0 }));
+            a.defaults.post.addEffect(new Bloom({ aux: [0.6, 0, 0] }));
+            a.defaults.post.addEffect(new Fxaa({ strength: 0.5 }));
+            a.defaults.post.addEffect(new Vignette({ strength: 0.3 }));
 
-            // ── Pano XPBD (20×20 = 441 partículas, ~800 constraints) ─────
-            // Elevado a y=10 — acima do bastão (y=6, h=4) e da esfera (y=5).
-            // Cai sob gravidade, drapa sobre os corpos rígidos e colide com o
-            // chão — permite validar que nenhum objeto atravessa o outro.
-            /*const SEGS = 20;
-            const clothGeo = new PlaneGeometry(6, 6, SEGS, SEGS);
-            const clothBody = new SoftBody({
-                mass: 1.0,
-                compliance: 1e-5,
-                damping: 0.02,
-                particleRadius: 0.12,
-                offset: [0, 10, -1],
-                targetGeometry: clothGeo,
-            });
-            const cloth = new Mesh(clothGeo, new StandardMaterial({ color: [0.9, 0.2, 0.2, 1], roughness: 0.5 }));
-            cloth.addPhysics(clothBody);
-            scene.add(cloth);*/
-
-            // ── Bastão quase vertical (chão, lado esquerdo) ───────────────
-            // Cai no chão com 12° de inclinação. O primeiro contato gera
-            // impulso angular — a gravidade no CM decide para qual lado cai.
-            // Longe da plataforma e dos outros objetos para não interagir.
-            const anguloBastao = Math.PI * 12 / 180;
-            const bastao = new Mesh(
-                new BoxGeometry(0.4, 4.0, 0.4),
-                new StandardMaterial({ color: [0.9, 0.2, 0.2, 1], roughness: 0.5 }),
-            );
-            bastao.position[0] = 2;
-            bastao.position[1] = 6.0;
-            bastao.position[2] = -1;
-            bastao.rotation[2] = Math.sin(anguloBastao / 2);
-            bastao.rotation[3] = Math.cos(anguloBastao / 2);
-            bastao.addPhysics(new RigidBody({ mass: 1.0, friction: 0.2, restitution: 0.4, linearDamping: 0.05, angularDamping: 0.4 }));
-            bastao.addPhysics(new BoxShape(0.2, 2.0, 0.2));
-            scene.add(bastao);
-
-            // ── Cubo inclinado (plataforma) ───────────────────────────────
-            // 30° de inclinação em Z: a aresta inferior direita toca primeiro
-            // a plataforma → impulso off-center → rotação visível → rola e cai.
-            const anguloCubo = Math.PI * 30 / 180;
-            const cubo = new Mesh(
-                new BoxGeometry(),
-                new WireframeMaterial({ color: [0.2, 0.9, 0.4, 1], lineWidth: 2 }),
-            );
-            cubo.position[0] = 0.0;
-            cubo.position[1] = 4.0;
-            cubo.position[2] = -1.0;
-            cubo.rotation[2] = Math.sin(anguloCubo / 2);
-            cubo.rotation[3] = Math.cos(anguloCubo / 2);
-            cubo.addPhysics(new RigidBody({ mass: 1.0, friction: 0.8, restitution: 0.3, linearDamping: 0.05, angularDamping: 0.1 }));
-            cubo.addPhysics(new BoxShape(0.5, 0.5, 0.5));
-            scene.add(cubo);
-
-            // ── Esfera laranja (borda da plataforma) ──────────────────────
-            // Cai na borda da plataforma → rola para fora e cai no chão.
-            const esfera = new Mesh(
-                new SphereGeometry(0.5, 24, 16),
-                new StandardMaterial({ color: [1.0, 0.55, 0.1, 1], roughness: 0.3 }),
-            );
-            esfera.position[0] = 1.0;
-            esfera.position[1] = 5.0;
-            esfera.position[2] = 3.0;  // separada de bastão/cubo (z=-1) para não ser empurrada
-            esfera.addPhysics(new RigidBody({ mass: 1.2, friction: 0.4, restitution: 0.5, linearDamping: 0.05, angularDamping: 0.4 }));
-            esfera.addPhysics(new SphereShape(0.5));
-            scene.add(esfera);
-
-            // ── Plataforma gelatina FEM ───────────────────────────────────
-            /*const { youngsModulus: E, poissonsRatio: nu } = GEL_MATERIAL;
-            const mu = E / (2 * (1 + nu));
-            const lambda = E * nu / ((1 + nu) * (1 - 2 * nu));
-
-            const gelGeo = new FEMBoxGeometry(
-                GEL_MESH.width, GEL_MESH.height, GEL_MESH.depth,
-                GEL_MESH.cellsX, GEL_MESH.cellsY, GEL_MESH.cellsZ,
-                0,     // offsetX
-                0.02,  // offsetY — base em y=0.02 (quase no chão), impacto mínimo
-                -1,    // offsetZ
-            );
-
-            const platform = new Mesh(
-                gelGeo,
-                new StandardMaterial({ color: GEL_MESH.color, roughness: GEL_MESH.roughness }),
-            );
-
-            const gelBody = new FEMBody({
-                mass: GEL_MATERIAL.mass,
-                mu,
-                lambda,
-                damping: GEL_MATERIAL.damping,
-                collisionRadius: GEL_MATERIAL.collisionRadius,
-                restitution: GEL_MATERIAL.restitution,
-            });
-
-            const { nodes, elements } = boxToFEMBody(
-                GEL_MESH.width, GEL_MESH.height, GEL_MESH.depth,
-                GEL_MESH.cellsX, GEL_MESH.cellsY, GEL_MESH.cellsZ,
-                // Sem pinnedBottom: todos os nós livres caem até o chão.
-                // O FEM collision kernel cuida do contato com a PlaneShape.
-                { offsetX: 0, offsetY: 0.02, offsetZ: -1 },
-            );
-            gelBody.nodes = nodes;
-            gelBody.elements = elements;
-
-            platform.addPhysics(gelBody);
-            scene.add(platform);*/
-
-            // ── Neve MPM ──────────────────────────────────────────────────
-            // 800 partículas de neve caindo de y=8-10, espalhadas em x/z [-4,4].
-            // O MPMComputePass simula via MLS-MPM (snow: hardening, thetaC, thetaS).
-            // Renderizado como point-list — cada partícula = 1 px branco-azulado.
-            const SNOW_COUNT = 800;
-            const snowParticles: MPMParticleData[] = [];
-            for (let i = 0; i < SNOW_COUNT; i++) {
-                snowParticles.push({
-                    x:  (Math.random() - 0.5) * 8,
-                    y:  8 + Math.random() * 2,
-                    z:  (Math.random() - 0.5) * 8,
-                    vx: (Math.random() - 0.5) * 0.3,
-                    vy: -0.3 - Math.random() * 0.4,
-                    vz: (Math.random() - 0.5) * 0.3,
-                });
-            }
-
-            const snowGeo = new PointCloudGeometry(SNOW_COUNT);
-            const snowMat = new StandardMaterial({ color: [0.88, 0.93, 1.0, 1], roughness: 0.9 });
-            snowMat.topology = 'point-list';
-
-            const snow = new Mesh(snowGeo, snowMat);
-            const snowBody = new MPMBody({ material: 'snow', E: 1.4e5, nu: 0.2 });
-            snowBody.particles = snowParticles;
-            snow.addPhysics(snowBody);
-            scene.add(snow);
-
-            // ── Resize ────────────────────────────────────────────────────
-            const onResize = () => {
-                canvas!.width = canvas!.clientWidth * devicePixelRatio;
-                canvas!.height = canvas!.clientHeight * devicePixelRatio;
-                renderer.setSize(canvas!.width, canvas!.height);
-                camera.setPerspective(Math.PI / 4, canvas!.width / canvas!.height, 0.1, 100);
-            };
-            window.addEventListener('resize', onResize);
-            onResize();
-
-            // ── Game loop ─────────────────────────────────────────────────
-            const tick = async () => {
-                if (!running) return;
-                // Renderer gerencia dt e world.step() internamente — não chamar world.step() aqui
-                await renderer.render(scene, camera);
-                rafId = requestAnimationFrame(tick);
-            };
-            rafId = requestAnimationFrame(tick);
-
-            return () => window.removeEventListener('resize', onResize);
-        }
-
-        let cleanup: (() => void) | undefined;
-        init().then(fn => { cleanup = fn; });
+            a.start();
+        })();
 
         return () => {
-            running = false;
-            cancelAnimationFrame(rafId);
-            cleanup?.();
+            cancelled = true;
+            interaction?.detach();
+            app?.stop();
+            app?.dispose?.();
         };
     }, []);
 
     return (
         <canvas
             ref={canvasRef}
+            id="gpuCanvas"
             style={{ display: 'block', width: '100%', height: '100%' }}
         />
     );
