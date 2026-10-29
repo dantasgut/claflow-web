@@ -73,6 +73,9 @@ const engine = {
     interfaces(app: Application, n: number): void {
         app.defaults.refraction.maxInterfaces = n;
     },
+    denoise(app: Application, on: boolean): void {
+        app.defaults.temporalFilter.enabled = on;
+    },
     caustics(c: clayflow.Caustics, on: boolean): void {
         c.enabled = on;
     },
@@ -145,6 +148,14 @@ export function ScenePanel({ app }: { readonly app: Application }) {
                             value={refraction.maxInterfaces}
                             set={(v) => {
                                 engine.interfaces(app, v);
+                                refresh();
+                            }}
+                        />
+                        <Toggle
+                            label="filtro do sinal traçado"
+                            value={app.defaults.temporalFilter.enabled}
+                            set={(v) => {
+                                engine.denoise(app, v);
                                 refresh();
                             }}
                         />
