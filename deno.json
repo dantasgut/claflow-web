@@ -5,6 +5,7 @@
     "uuid": "../clayflow/node_modules/uuid/dist/index.js"
   },
   "tasks": {
-    "agua": "deno run --unstable-webgpu --allow-ffi --allow-env --allow-read --allow-net deno/agua.ts"
+    "agua": "deno run --unstable-webgpu --allow-ffi --allow-env --allow-read --allow-net deno/agua.ts",
+    "video": "deno run --unstable-webgpu --allow-ffi --allow-env --allow-read --allow-write --allow-run --allow-net deno/video.ts"
   }
 }

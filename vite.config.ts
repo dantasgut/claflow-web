@@ -5,7 +5,8 @@ import path from 'path';
 // O motor pelas fontes (spec 038): `clayflow` (o núcleo) e `clayflow/web` (o ponto de entrada do navegador) apontam
 // para o código-fonte do clayflow vizinho — mudanças no motor aparecem no app pelo HMR, sem rebuild da lib; os shaders
 // `?raw` do motor o Vite resolve como no próprio motor.
-const engine = path.resolve(__dirname, '../clayflow/src');
+// `CLAYFLOW_ENGINE` aponta para outra cópia do motor (ex.: um worktree num commit anterior), sem mudar o app.
+const engine = path.resolve(__dirname, process.env.CLAYFLOW_ENGINE ?? '../clayflow', 'src');
 
 export default defineConfig({
     plugins: [react()],
