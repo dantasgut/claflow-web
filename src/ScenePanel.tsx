@@ -47,6 +47,31 @@ function findInScene(app: Application): Found {
     return { caustics, sun };
 }
 
+/**
+ * A intensidade com que a cena montou cada luz (a primeira lida): os controles são relativos a ela — a cena pode estar
+ * em unidades relativas (1,2) ou reais (100 000 lux com o céu físico).
+ */
+const initial = new WeakMap<object, number>();
+function initialOf(owner: object, current: number): number {
+    let v = initial.get(owner);
+    if (v === undefined) {
+        v = current > 0 ? current : 1;
+        initial.set(owner, v);
+    }
+    return v;
+}
+
+/** A exposição com que a cena montou a imagem (a primeira lida): o controle soma a ela. */
+const baseExposure = new WeakMap<object, number>();
+function baseExposureOf(owner: { readonly data: { readonly exposure: number } }): number {
+    let v = baseExposure.get(owner);
+    if (v === undefined) {
+        v = owner.data.exposure;
+        baseExposure.set(owner, v);
+    }
+    return v;
+}
+
 /** Azimute e elevação (graus) da direção para onde a luz aponta. */
 function anglesOf(direction: readonly number[]): [number, number] {
     const [x, y, z] = [-(direction[0] ?? 0), -(direction[1] ?? -1), -(direction[2] ?? 0)];
@@ -183,13 +208,13 @@ export function ScenePanel({ app }: { readonly app: Application }) {
                         ) : (
                             <>
                                 <Slider
-                                    label="intensidade"
+                                    label="intensidade (× a da cena)"
                                     min={0}
-                                    max={5}
+                                    max={4}
                                     step={0.05}
-                                    value={sun.data.intensity}
+                                    value={sun.data.intensity / initialOf(sun, sun.data.intensity)}
                                     set={(v) => {
-                                        engine.sunIntensity(sun, v);
+                                        engine.sunIntensity(sun, v * initialOf(sun, sun.data.intensity));
                                         refresh();
                                     }}
                                 />
@@ -220,13 +245,13 @@ export function ScenePanel({ app }: { readonly app: Application }) {
                     </Section>
                     <Section title="Ambiente">
                         <Slider
-                            label="intensidade do céu"
+                            label="intensidade do céu (× a da cena)"
                             min={0}
-                            max={3}
+                            max={4}
                             step={0.05}
-                            value={ambient.data.intensity}
+                            value={ambient.data.intensity / initialOf(ambient, ambient.data.intensity)}
                             set={(v) => {
-                                engine.sky(app, v);
+                                engine.sky(app, v * initialOf(ambient, ambient.data.intensity));
                                 refresh();
                             }}
                         />
@@ -241,13 +266,13 @@ export function ScenePanel({ app }: { readonly app: Application }) {
                     </Section>
                     <Section title="Imagem">
                         <Slider
-                            label="exposição (EV)"
+                            label="exposição (EV, + a da cena)"
                             min={-4}
                             max={4}
                             step={0.1}
-                            value={presentation.data.exposure}
+                            value={presentation.data.exposure - baseExposureOf(presentation)}
                             set={(v) => {
-                                engine.exposure(app, v);
+                                engine.exposure(app, v + baseExposureOf(presentation));
                                 refresh();
                             }}
                         />

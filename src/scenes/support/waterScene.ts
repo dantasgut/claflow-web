@@ -14,6 +14,7 @@ import {
     ParticlePhysics,
     PlaneGeometry,
     PointSpriteMaterial,
+    Sky,
     StandardMaterial,
     Transform,
     nodes,
@@ -128,6 +129,11 @@ export interface WaterSceneOptions {
     readonly spacing?: number;
     /** Partículas secundárias do corpo (spray, espuma e bolhas; padrão ligadas com a água pelo grafo). */
     readonly diffuse?: boolean;
+    /**
+     * O céu físico (`Sky`, com o disco do sol) como fundo e ambiente — o que a água e o vidro refletem —, em unidades reais:
+     * o sol a 100 000 lux e a exposição e o ambiente na mesma escala (o brilho da cena fica o de sem ele). Padrão sem.
+     */
+    readonly sky?: boolean;
     /** A física da superfície dos sólidos diante da água (spec 034; sem ela, a padrão: lisa e impermeável). */
     readonly surfaces?: {
         readonly floor?: SurfacePhysicsOptions;
@@ -135,6 +141,11 @@ export interface WaterSceneOptions {
         readonly box?: SurfacePhysicsOptions;
     };
 }
+
+/** A intensidade do sol da cena (unidades relativas, sem o céu físico). */
+const SUN_INTENSITY = 1.2;
+/** O sol com o céu físico (lux ao nível do chão, dia claro). */
+const SKY_SUN_LUX = 100000;
 
 /** O collider com a física da superfície, se dada. */
 function solid(collider: BoxCollider, surface: SurfacePhysicsOptions | undefined): BoxCollider {
@@ -165,16 +176,22 @@ export function waterScene(app: Application, options: WaterSceneOptions): FluidB
             ),
     );
     const dir = options.light ?? [-0.25, -1, -0.35];
-    world.insert(
-        new DirectionalLight({
-            direction: [...dir, 0],
-            color: [1, 1, 1, 1],
-            intensity: 1.2,
-            castShadow: true,
-            // O disco do sol (raio angular de 0,267°): o brilho dele na água e no vidro.
-            angularRadius: 0.00466,
-        }),
-    );
+    // Com o céu físico, o sol em lux reais; a exposição e o ambiente sobem na mesma razão.
+    const scale = options.sky === true ? SKY_SUN_LUX / SUN_INTENSITY : 1;
+    const sun = new DirectionalLight({
+        direction: [...dir, 0],
+        color: [1, 1, 1, 1],
+        intensity: SUN_INTENSITY * scale,
+        castShadow: true,
+        // O disco do sol (raio angular de 0,267°): o brilho dele na água e no vidro.
+        angularRadius: 0.00466,
+    });
+    world.insert(sun);
+    if (options.sky === true) {
+        world.insert(new Sky({ sun, sunDisk: true }));
+        app.defaults.presentation.data.exposure = -Math.log2(scale);
+        app.defaults.ambient.data.intensity *= scale;
+    }
     world.insert(new GravityField({ acceleration: [0, -9.81, 0, 0] }));
     world.insert(
         new ParticlePhysics(

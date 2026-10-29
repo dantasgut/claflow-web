@@ -267,7 +267,17 @@ export const SHOTS: Record<string, Shot> = {
                         autoRotateSpeed: SPIN,
                     }),
                 );
-            waterScene(app, { width: W, height: H, box: true, camera });
+            waterScene(app, {
+                width: W,
+                height: H,
+                box: true,
+                camera,
+                // O céu físico para a água refletir; ondulações mais calmas (a água assentada fica transparente).
+                sky: true,
+                material: { ripple: { strength: 0.12 } },
+            });
+            // O traçado da água e do vidro não sorteia o lobo (spec 039): o filtro do sinal só borraria o que se vê.
+            app.defaults.temporalFilter.enabled = false;
             return () => undefined;
         },
     },
