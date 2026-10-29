@@ -168,6 +168,8 @@ export function waterScene(app: Application, options: WaterSceneOptions): FluidB
             color: [1, 1, 1, 1],
             intensity: 1.2,
             castShadow: true,
+            // O disco do sol (raio angular de 0,267°): o brilho dele na água e no vidro.
+            angularRadius: 0.00466,
         }),
     );
     world.insert(new GravityField({ acceleration: [0, -9.81, 0, 0] }));
