@@ -37,7 +37,10 @@ export const WATER_SPACING = 0.025;
 export interface WaterLook {
     /** Índice de refração (padrão 1,333). */
     readonly ior?: number;
-    /** Número de Abbe da dispersão (padrão 55,7; 0 sem dispersão). */
+    /**
+     * Número de Abbe da dispersão (padrão 0, sem dispersão — decisão do usuário, 2026-10-29: no respingo as cores se
+     * separam abaixo do pixel e, traçadas com uma amostra por canal, viravam pontos coloridos; a água real é 55,7).
+     */
     readonly abbe?: number;
     /** Absorção por metro por canal (padrão a da água: 0,45; 0,09; 0,06). */
     readonly absorption?: readonly [number, number, number];
@@ -61,7 +64,7 @@ export function waterLook(look: WaterLook = {}): MaterialFunction {
         reflect: nodes.bsdf.dielectric.with({ ior, roughness: look.roughness ?? 0.02 }),
         transmit: nodes.bsdf.transmission.with({
             ior,
-            abbe: look.abbe ?? 55.7,
+            abbe: look.abbe ?? 0,
             color: absorption.map((a) => Math.exp(-a)),
             depth: 1,
         }),
