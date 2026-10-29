@@ -1,0 +1,10 @@
+{
+  "imports": {
+    "clayflow": "../clayflow/dist/index.js",
+    "clayflow/deno": "../clayflow/dist/deno.js",
+    "uuid": "../clayflow/node_modules/uuid/dist/index.js"
+  },
+  "tasks": {
+    "agua": "deno run --unstable-webgpu --allow-ffi --allow-env --allow-read --allow-net deno/agua.ts"
+  }
+}
