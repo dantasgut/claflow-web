@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Application, createScene } from 'clayflow/web';
 import { H, SHOTS, W } from './scenes/catalog';
+import { FpsCounter, ScenePanel } from './ScenePanel';
 
 const NAMES = Object.keys(SHOTS);
 
@@ -28,10 +29,11 @@ export default function App() {
     return <ScenePlayer name={scene} />;
 }
 
-/** A cena no canvas, quadro a quadro pelo laço do navegador; Espaço pausa. */
+/** A cena no canvas, quadro a quadro pelo laço do navegador; Espaço pausa. A taxa de quadros e o painel por cima. */
 function ScenePlayer({ name }: { readonly name: string }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [error, setError] = useState<string | null>(null);
+    const [running, setRunning] = useState<Application | null>(null);
     useEffect(() => {
         const canvas = canvasRef.current;
         const shot = SHOTS[name];
@@ -63,12 +65,14 @@ function ScenePlayer({ name }: { readonly name: string }) {
                 });
                 window.addEventListener('keydown', onKey);
                 created.start();
+                setRunning(created);
             } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
             }
         })();
         return () => {
             disposed = true;
+            setRunning(null);
             window.removeEventListener('keydown', onKey);
             app?.dispose();
         };
@@ -76,6 +80,8 @@ function ScenePlayer({ name }: { readonly name: string }) {
     return (
         <div>
             <canvas ref={canvasRef} style={{ width: '100vw', height: 'auto', display: 'block' }} />
+            {running !== null && <FpsCounter app={running} />}
+            {running !== null && <ScenePanel app={running} />}
             {error !== null && <pre style={{ color: '#f66' }}>{error}</pre>}
         </div>
     );

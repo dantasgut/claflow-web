@@ -31,6 +31,8 @@ import { WATER_SPACING, waterLook, waterScene } from './support/waterScene';
 const q = new URLSearchParams(location.search);
 export const W = Number(q.get('w') ?? 1280);
 export const H = Number(q.get('h') ?? 720);
+/** `?girar` (0,3 rad/s) ou `?girar=<rad/s>`: a câmera orbital gira sozinha enquanto a animação roda. */
+const SPIN = q.has('girar') ? Number(q.get('girar') || 0.3) : 0;
 
 
 /** Uma cena: quadros padrão e a montagem, que devolve o movimento por quadro. */
@@ -246,8 +248,26 @@ export const SHOTS: Record<string, Shot> = {
     agua: {
         frames: 420,
         build(app) {
-            // A câmera é a da cena do tanque (parada): o movimento é o da barragem.
-            waterScene(app, { width: W, height: H, box: true, eye: [1.3, 1.25, 1.9] });
+            // A câmera orbita o tanque (arrastar: girar · roda: aproximar); parada sem entrada (ou girando sozinha com
+            // `?girar`), o movimento é o da barragem.
+            const camera = new clayflow.Camera({
+                fov: Math.PI / 4,
+                aspect: W / H,
+                aspectMode: 'fixed',
+                near: 0.05,
+                far: 50,
+            })
+                .add(new Transform())
+                .add(
+                    new clayflow.OrbitController({
+                        target: [0, 0.2, 0],
+                        distance: 2.8,
+                        damping: 0.85,
+                        autoRotate: SPIN !== 0,
+                        autoRotateSpeed: SPIN,
+                    }),
+                );
+            waterScene(app, { width: W, height: H, box: true, camera });
             return () => undefined;
         },
     },
