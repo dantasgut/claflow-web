@@ -157,6 +157,9 @@ export function waterScene(app: Application, options: WaterSceneOptions): FluidB
     const world = app.world;
     // O fundo é o hemisfério (spec 034): o mundo que a água reflete e refrata é o que se vê atrás da cena.
     app.defaults.ambient.background = true;
+    // O teto de interfaces do traçado no tanque: com 8, a imagem fica igual à de 16 (diferença no nível do ruído entre
+    // duas capturas de 16), 4,5 ms a menos por quadro a 1280 × 720 (medida de 2026-10-30).
+    app.defaults.refraction.maxInterfaces = 8;
     const spacing = options.spacing ?? WATER_SPACING;
     const eye = options.eye ?? [0, 1.25, 1.55];
     const target = options.target ?? [0, 0.1, 0];
