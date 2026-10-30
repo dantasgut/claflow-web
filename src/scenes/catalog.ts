@@ -26,6 +26,10 @@ import {
 import { closureFn, materialGraph } from './support/materialScenes';
 import { CAUSTIC_SPHERE, CAUSTIC_SUN } from './support/causticScenes';
 import { WATER_SPACING, waterLook, waterScene } from './support/waterScene';
+import { loadHdr } from './support/hdr';
+
+/** A escala da panorâmica HDR na da cena (o sol a 1,2): o céu dela fica no brilho do hemisfério de antes. */
+const ENVIRONMENT_INTENSITY = 0.6;
 
 
 const q = new URLSearchParams(location.search);
@@ -272,9 +276,13 @@ export const SHOTS: Record<string, Shot> = {
                 height: H,
                 box: true,
                 camera,
-                // O céu físico para a água refletir; ondulações mais calmas (a água assentada fica transparente).
-                sky: true,
+                // Ondulações mais calmas (a água assentada fica transparente).
                 material: { ripple: { strength: 0.12 } },
+            });
+            // A imagem do mundo (panorâmica HDR, Poly Haven, CC0) para a água e o vidro refletirem; ela é o fundo.
+            app.defaults.ambient.background = false;
+            void loadHdr(`${import.meta.env.BASE_URL}env/quarry_cloudy_1k.hdr`).then((img) => {
+                app.world.insert(new clayflow.EnvironmentMap({ ...img, intensity: ENVIRONMENT_INTENSITY }));
             });
             // O traçado da água e do vidro não sorteia o lobo (spec 039): o filtro do sinal só borraria o que se vê.
             app.defaults.temporalFilter.enabled = false;
