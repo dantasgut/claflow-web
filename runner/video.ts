@@ -11,7 +11,7 @@ import { startServer } from './server';
  * lida direto da GPU:
  *
  *   npm run video -- <cena>[,<cena>…] [--frames N] [--out pasta] [--lossless] [--10bit] [--size 1280x720]
- *                     [--timeout s] [--aa off|temporal|msaa|accumulate]
+ *                     [--timeout s] [--aa off|temporal|msaa|accumulate] [--profile high|medium|low]
  *
  * A página monta a cena, espera o motor pronto e, quadro a quadro com passo fixo de 1/60 s, lê o quadro apresentado
  * (`readCanvas`, sem canvas 2D nem JPEG) e o entrega por função exposta; o runner escreve os pixels no `stdin` do
@@ -35,6 +35,8 @@ interface VideoArgs {
     readonly height: number;
     readonly timeoutMs: number;
     readonly aa: string | undefined;
+    /** Perfil do renderizador (spec 039), aplicado antes da cena; o nome do arquivo ganha `-<perfil>`. */
+    readonly profile: string | undefined;
 }
 
 const PORT = 5184;
@@ -56,6 +58,7 @@ function parse(argv: readonly string[]): VideoArgs {
     let height = 720;
     let timeoutMs = 900_000;
     let aa: string | undefined;
+    let profile: string | undefined;
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i] ?? '';
         if (a === '--frames') {
@@ -75,12 +78,13 @@ function parse(argv: readonly string[]): VideoArgs {
             if (!Number.isFinite(v) || v <= 0) throw new Error('--timeout espera segundos > 0');
             timeoutMs = v * 1000;
         } else if (a === '--aa') aa = argv[++i];
+        else if (a === '--profile') profile = argv[++i];
         else if (a.startsWith('--')) throw new Error(`opção desconhecida: ${a}`);
         else scenes.push(...a.split(',').filter((n) => n.length > 0));
     }
     if (scenes.length === 0)
         throw new Error('informe ao menos uma cena (ex.: npm run video -- lente)');
-    return { scenes, frames, out, lossless, tenBit, width, height, timeoutMs, aa };
+    return { scenes, frames, out, lossless, tenBit, width, height, timeoutMs, aa, profile };
 }
 
 function requireFfmpeg(): void {
@@ -229,7 +233,8 @@ async function record(
     const encoders: Encoder[] = [];
     let half = false;
     let frames = 0;
-    const exact = join(args.out, `${scene}-lossless.mkv`);
+    const stem = args.profile !== undefined ? `${scene}-${args.profile}` : scene;
+    const exact = join(args.out, `${stem}-lossless.mkv`);
     state.onStart = (w, h, format) => {
         const px = pixelFormat(format);
         half = px.half;
@@ -245,7 +250,7 @@ async function record(
             '-i',
             '-',
         ];
-        const mp4 = join(args.out, args.tenBit ? `${scene}-10bit.mp4` : `${scene}.mp4`);
+        const mp4 = join(args.out, args.tenBit ? `${stem}-10bit.mp4` : `${stem}.mp4`);
         const codec = args.tenBit
             ? [
                   '-c:v',
@@ -302,6 +307,7 @@ async function record(
         ...(args.tenBit ? { bits: '16' } : {}),
         ...(args.frames !== undefined ? { frames: String(args.frames) } : {}),
         ...(args.aa !== undefined ? { aa: args.aa } : {}),
+        ...(args.profile !== undefined ? { profile: args.profile } : {}),
     });
     const server = `http://localhost:${PORT}/`;
     await page.goto(`${server}recorder.html?${query.toString()}`);
