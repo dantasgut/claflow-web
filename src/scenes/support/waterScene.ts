@@ -159,7 +159,7 @@ export function waterScene(app: Application, options: WaterSceneOptions): FluidB
     app.defaults.ambient.background = true;
     // O teto de interfaces do traçado no tanque: com 8, a imagem fica igual à de 16 (diferença no nível do ruído entre
     // duas capturas de 16), 4,5 ms a menos por quadro a 1280 × 720 (medida de 2026-10-30).
-    app.defaults.refraction.maxInterfaces = 8;
+    app.defaults.renderer.lightPaths.transmission = 8;
     const spacing = options.spacing ?? WATER_SPACING;
     const eye = options.eye ?? [0, 1.25, 1.55];
     const target = options.target ?? [0, 0.1, 0];
@@ -192,7 +192,7 @@ export function waterScene(app: Application, options: WaterSceneOptions): FluidB
     world.insert(sun);
     if (options.sky === true) {
         world.insert(new Sky({ sun, sunDisk: true }));
-        app.defaults.presentation.data.exposure = -Math.log2(scale);
+        app.defaults.renderer.output.data.exposure = -Math.log2(scale);
         app.defaults.ambient.data.intensity *= scale;
     }
     world.insert(new GravityField({ acceleration: [0, -9.81, 0, 0] }));
