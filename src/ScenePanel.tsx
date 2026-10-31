@@ -29,18 +29,19 @@ export function FpsCounter({ app }: { readonly app: Application }) {
     );
 }
 
-/** O que o painel acha na cena: as cáusticas e a primeira luz direcional (inseridas depois da montagem, às vezes). */
+/** O que o painel acha na cena: as cáusticas (na cena com o primeiro transmissivo) e a primeira luz direcional. */
 interface Found {
-    readonly caustics: clayflow.Caustics | undefined;
+    readonly caustics: clayflow.CausticsSettings | undefined;
     readonly sun: clayflow.DirectionalLight | undefined;
 }
 
 function findInScene(app: Application): Found {
-    let caustics: clayflow.Caustics | undefined;
+    const renderer = app.defaults.renderer;
+    const caustics =
+        app.world.entityIdOfResource(renderer.causticsResource) === undefined ? undefined : renderer.caustics;
     let sun: clayflow.DirectionalLight | undefined;
     for (const record of app.world.allRecords()) {
         for (const r of record.resources) {
-            if (caustics === undefined && r instanceof clayflow.Caustics) caustics = r;
             if (sun === undefined && r instanceof clayflow.DirectionalLight) sun = r;
         }
     }
@@ -93,15 +94,15 @@ function directionOf(azimuth: number, elevation: number): number[] {
  */
 const engine = {
     refraction(app: Application, on: boolean): void {
-        app.defaults.refraction.enabled = on;
+        app.defaults.renderer.lightPaths.refraction = on;
     },
     interfaces(app: Application, n: number): void {
-        app.defaults.refraction.maxInterfaces = n;
+        app.defaults.renderer.lightPaths.transmission = n;
     },
     denoise(app: Application, on: boolean): void {
-        app.defaults.temporalFilter.enabled = on;
+        app.defaults.renderer.temporalFilter.enabled = on;
     },
-    caustics(c: clayflow.Caustics, on: boolean): void {
+    caustics(c: clayflow.CausticsSettings, on: boolean): void {
         c.enabled = on;
     },
     sunIntensity(sun: clayflow.DirectionalLight, v: number): void {
@@ -116,8 +117,11 @@ const engine = {
     background(app: Application, on: boolean): void {
         app.defaults.ambient.background = on;
     },
+    profile(app: Application, p: clayflow.RenderProfile): void {
+        app.defaults.renderer.profile = p;
+    },
     exposure(app: Application, v: number): void {
-        app.defaults.presentation.data.exposure = v;
+        app.defaults.renderer.output.data.exposure = v;
     },
 };
 
@@ -145,7 +149,8 @@ export function ScenePanel({ app }: { readonly app: Application }) {
         };
     }, [app]);
 
-    const { refraction, ambient, presentation } = app.defaults;
+    const { renderer, ambient } = app.defaults;
+    const presentation = renderer.output;
     const { caustics, sun } = found;
     const [azimuth, elevation] = sun === undefined ? [0, 90] : anglesOf(sun.data.direction);
 
@@ -159,7 +164,7 @@ export function ScenePanel({ app }: { readonly app: Application }) {
                     <Section title="Refração">
                         <Toggle
                             label="ligada"
-                            value={refraction.enabled}
+                            value={renderer.lightPaths.refraction}
                             set={(v) => {
                                 engine.refraction(app, v);
                                 refresh();
@@ -170,7 +175,7 @@ export function ScenePanel({ app }: { readonly app: Application }) {
                             min={1}
                             max={32}
                             step={1}
-                            value={refraction.maxInterfaces}
+                            value={renderer.lightPaths.transmission}
                             set={(v) => {
                                 engine.interfaces(app, v);
                                 refresh();
@@ -178,7 +183,7 @@ export function ScenePanel({ app }: { readonly app: Application }) {
                         />
                         <Toggle
                             label="filtro do sinal traçado"
-                            value={app.defaults.temporalFilter.enabled}
+                            value={app.defaults.renderer.temporalFilter.enabled}
                             set={(v) => {
                                 engine.denoise(app, v);
                                 refresh();
@@ -277,10 +282,71 @@ export function ScenePanel({ app }: { readonly app: Application }) {
                             }}
                         />
                     </Section>
+                    <Section title="Desempenho">
+                        <label style={styles.row}>
+                            perfil
+                            <select
+                                value={renderer.profile}
+                                onChange={(e) => {
+                                    engine.profile(app, e.target.value as clayflow.RenderProfile);
+                                    refresh();
+                                }}
+                            >
+                                <option value="high">alto</option>
+                                <option value="medium">médio</option>
+                                <option value="low">baixo</option>
+                            </select>
+                        </label>
+                        <StageTimes app={app} />
+                    </Section>
                     <div style={styles.hint}>Espaço: pausa · arrastar: girar · roda: aproximar</div>
                 </>
             )}
         </div>
+    );
+}
+
+/**
+ * O tempo de GPU de cada estágio (a média do último meio segundo, pelos escopos da C2): liga a medida por passe enquanto
+ * aberta. No Apple os carimbos por passe deixam os passes de desenho mais lentos — a tabela compara estágios, não mede o
+ * quadro (o contador de FPS sem ela é o tempo real).
+ */
+function StageTimes({ app }: { readonly app: Application }) {
+    const [on, setOn] = useState(false);
+    const [rows, setRows] = useState<readonly (readonly [string, number])[]>([]);
+    useEffect(() => {
+        if (!on) return;
+        app.setProfiling('passes', 2048);
+        const sum = new Map<string, number>();
+        let frames = 0;
+        const off = app.events.on('gpuFrameTimed', (e) => {
+            frames++;
+            for (const [flow, ms] of Object.entries(e.flowsMs)) sum.set(flow, (sum.get(flow) ?? 0) + ms);
+        });
+        const timer = setInterval(() => {
+            if (frames === 0) return;
+            setRows([...sum].map(([k, v]) => [k, v / frames] as const).sort((a, b) => b[1] - a[1]).slice(0, 12));
+            sum.clear();
+            frames = 0;
+        }, 500);
+        return () => {
+            off?.();
+            clearInterval(timer);
+            app.setProfiling(false);
+        };
+    }, [app, on]);
+    return (
+        <>
+            <Toggle label="tempos por estágio (GPU)" value={on} set={setOn} />
+            {on &&
+                rows.map(([flow, ms]) => (
+                    <div key={flow} style={styles.sliderLabel}>
+                        <span>{flow}</span>
+                        <span style={styles.value}>{ms.toFixed(2)} ms</span>
+                    </div>
+                ))}
+            {on && <div style={styles.hint}>com os carimbos por passe o desenho fica mais lento no Apple</div>}
+        </>
     );
 }
 

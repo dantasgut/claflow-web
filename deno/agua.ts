@@ -6,8 +6,20 @@
  *
  *   deno task agua [largura altura]      (padrão 960 540, um pixel por ponto)
  */
-import { Application, Camera, OrbitController, Transform, createScene } from 'clayflow/deno';
+import {
+    Application,
+    Camera,
+    EnvironmentMap,
+    GlobalIllumination,
+    OrbitController,
+    Transform,
+    createScene,
+} from 'clayflow/deno';
+import { decodeHdr } from '../src/scenes/support/hdr.ts';
 import { waterScene } from '../src/scenes/support/waterScene.ts';
+
+/** A escala da panorâmica na cena (a mesma da cena `agua` do app). */
+const ENVIRONMENT_INTENSITY = 0.6;
 
 const [w, h] = Deno.args.map(Number);
 const W = Number.isInteger(w) && w! > 0 ? w! : 960;
@@ -32,7 +44,15 @@ async function open(): Promise<'restart' | 'close'> {
     const camera = new Camera({ fov: Math.PI / 4, aspect: W / H, aspectMode: 'fixed', near: 0.05, far: 50 })
         .add(new Transform())
         .add(new OrbitController({ target: [0, 0.2, 0], distance: 2.8, damping: 0.85 }));
-    waterScene(app, { width: W, height: H, box: true, camera });
+    waterScene(app, { width: W, height: H, box: true, camera, material: { ripple: { strength: 0.12 } } });
+    // A imagem do mundo (panorâmica HDR, Poly Haven, CC0) para a água e o vidro refletirem; ela é o fundo.
+    app.defaults.ambient.background = false;
+    const hdr = decodeHdr(await Deno.readFile(new URL('../public/env/quarry_cloudy_1k.hdr', import.meta.url)));
+    app.world.insert(new EnvironmentMap({ ...hdr, intensity: ENVIRONMENT_INTENSITY }));
+    // A luz global (spec 033): as sondas de irradiância pela cena.
+    app.world.insert(new GlobalIllumination({ quality: 'medium', probeSpacing: 0.4 }));
+    // O traçado da água e do vidro não sorteia o lobo (spec 039): o filtro do sinal só borraria o que se vê.
+    app.defaults.renderer.temporalFilter.enabled = false;
     console.log('compilando…');
     await app.whenReady({ timeoutMs: 300_000 });
     console.log('arrastar: girar · roda: aproximar · espaço: pausar · R: recomeçar · fechar a janela: sair');

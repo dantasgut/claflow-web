@@ -25,6 +25,8 @@ const q = new URLSearchParams(location.search);
 const BITS = q.get('bits') === '16' ? 16 : 8;
 /** Diagnóstico: `?aa=off|temporal|msaa|accumulate` troca o antisserrilhado (padrão: o do motor). */
 const AA = q.get('aa');
+/** `?profile=high|medium|low`: o perfil do renderizador (spec 039), antes da cena (o que ela ajusta vale por cima). */
+const PROFILE = q.get('profile');
 
 function log(msg: string): void {
     console.log(`[gravador] ${msg}`);
@@ -65,6 +67,7 @@ async function main(): Promise<void> {
     // Tempo de GPU por quadro (profiling do quadro): quantos quadros por segundo o motor gera nesta cena.
     const gpuMs: number[] = [];
     app.events.on('gpuFrameTimed', (e) => gpuMs.push(e.totalMs));
+    if (PROFILE !== null) app.defaults.renderer.profile = PROFILE as clayflow.RenderProfile;
     const update = shot.build(app);
     update(0);
     await app.whenReady({ timeoutMs: 120_000 });
