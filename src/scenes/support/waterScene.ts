@@ -1,6 +1,6 @@
 // Cena de água dos smokes da superfície de fluido (spec 017): tanque sobre chão quadriculado (ladrilhos claros e
 // escuros: a refração e a absorção aparecem no padrão), paredes de vidro de 0,5 m (desenhadas onde colidem, com a física da
-// superfície do vidro), luz direcional com sombra,
+// superfície do vidro), luz direcional com sombra, a luz global,
 // câmera e uma barragem de partículas. A aparência da água é um material do grafo (spec 034, T066: o mesmo dielétrico do vidro).
 // Determinística: as fixtures dependem só do código.
 import {
@@ -10,6 +10,7 @@ import {
     DiffuseParticles,
     DirectionalLight,
     FluidBody,
+    GlobalIllumination,
     GravityField,
     ParticlePhysics,
     PlaneGeometry,
@@ -195,6 +196,11 @@ export function waterScene(app: Application, options: WaterSceneOptions): FluidB
         app.defaults.renderer.output.data.exposure = -Math.log2(scale);
         app.defaults.ambient.data.intensity *= scale;
     }
+    // A luz rebatida da cena (spec 033): o chão, o fundo do tanque e a caixa sob a água com a luz que volta do céu, do
+    // chão e da água — no lugar do ambiente constante (os estágios padrão trocam o hemisfério por ela). Interior visto de
+    // fora: o volume fixo no tanque; 16 × 8 × 16 sondas a 0,1 m cobrem o tanque inteiro (1,6 × 0,8 m), as cascatas de
+    // 0,2 e 0,4 m o chão em volta. A qualidade é a do perfil do renderizador.
+    world.insert(new GlobalIllumination({ probeSpacing: 0.1, cascades: 3, center: [0, 0.3, 0] }));
     world.insert(new GravityField({ acceleration: [0, -9.81, 0, 0] }));
     world.insert(
         new ParticlePhysics(
