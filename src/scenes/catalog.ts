@@ -28,8 +28,13 @@ import { CAUSTIC_SPHERE, CAUSTIC_SUN } from './support/causticScenes';
 import { WATER_SPACING, waterLook, waterScene } from './support/waterScene';
 import { loadHdr } from './support/hdr';
 
-/** A escala da panorâmica HDR na da cena (o sol a 1,2): o céu dela fica no brilho do hemisfério de antes. */
-const ENVIRONMENT_INTENSITY = 0.6;
+/**
+ * A luz de um dia de sol na `agua`: o sol direto 6 a 8 vezes a luz do céu no chão (medido com a panorâmica a 0,6 e o
+ * sol a 1,2: o céu dava ~80 % da luz do chão — luz de dia encoberto, em que não há cáustica nem sombra). O céu da
+ * panorâmica a 1/8 e o sol 4 vezes: o brilho do chão fica no de antes, e a luz que a água concentra aparece.
+ */
+const ENVIRONMENT_INTENSITY = 0.075;
+const SUN_INTENSITY = 4.8;
 
 
 const q = new URLSearchParams(location.search);
@@ -277,6 +282,9 @@ export const SHOTS: Record<string, Shot> = {
                 box: true,
                 camera,
             });
+            for (const record of app.world.allRecords())
+                for (const r of record.resources)
+                    if (r instanceof clayflow.DirectionalLight) r.data.intensity = SUN_INTENSITY;
             // A imagem do mundo (panorâmica HDR, Poly Haven, CC0) para a água e o vidro refletirem; ela é o fundo.
             app.defaults.ambient.background = false;
             void loadHdr(`${import.meta.env.BASE_URL}env/quarry_cloudy_1k.hdr`).then((img) => {
