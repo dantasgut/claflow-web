@@ -32,7 +32,7 @@ function forwardOf(q: readonly number[]): [number, number, number] {
  * A navegação no tempo de uma cena do catálogo. O tempo é o do motor (`Time`): a pausa é a escala 0 — o laço segue
  * desenhando (a câmera responde, a imagem converge), a simulação e o movimento da cena param; o passo avança um quadro
  * de 1/60 s; a velocidade é a escala. O movimento da cena (`update(i)`, o mesmo da gravação) segue o quadro do tempo
- * decorrido. A câmera segue o tempo (o roteiro da cena, ou o controle que a cena pôs nela) ou fica livre: um
+ * simulado. A câmera segue o tempo (o roteiro da cena, ou o controle que a cena pôs nela) ou fica livre: um
  * `OrbitController` assume a câmera onde ela está, e o movimento da cena deixa de mexer nela.
  */
 export class TimeNavigator {
@@ -53,9 +53,12 @@ export class TimeNavigator {
         app.events.on('frameTick', () => this.tick());
     }
 
-    /** O quadro do tempo decorrido (60 por segundo de tempo da cena). */
+    /**
+     * O quadro do tempo simulado (passos de 1/60 s, como na gravação): o roteiro da cena anda com a física — sem
+     * GPU para 60 quadros por segundo, os passos por quadro têm teto e o tempo decorrido passaria à frente dela.
+     */
     get frame(): number {
-        return Math.round(this.app.time.elapsed * 60);
+        return Math.round(this.app.time.simulated * 60);
     }
 
     /** Avisa quem desenha os controles. */
