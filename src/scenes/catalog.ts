@@ -276,8 +276,6 @@ export const SHOTS: Record<string, Shot> = {
                 height: H,
                 box: true,
                 camera,
-                // Ondulações mais calmas (a água assentada fica transparente).
-                material: { ripple: { strength: 0.12 } },
             });
             // A imagem do mundo (panorâmica HDR, Poly Haven, CC0) para a água e o vidro refletirem; ela é o fundo.
             app.defaults.ambient.background = false;

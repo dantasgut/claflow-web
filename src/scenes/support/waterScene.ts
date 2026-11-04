@@ -48,7 +48,11 @@ export interface WaterLook {
     readonly absorption?: readonly [number, number, number];
     /** Rugosidade da superfície (padrão 0,02). */
     readonly roughness?: number;
-    /** Ondulações da superfície (nó `surface.ripple`; padrão inclinação 0,3, 6 cm, velocidade 1); `false` sem. */
+    /**
+     * Ondulações procedurais na normal da superfície (nó `surface.ripple`: inclinação 0,3, 6 cm e velocidade 1 por padrão
+     * quando pedidas). Padrão sem: as ondas da água das partículas são as da simulação — um relevo fixo por cima deixaria
+     * a água parada fosca, como ondulação congelada.
+     */
     readonly ripple?:
         | { readonly strength?: number; readonly size?: number; readonly speed?: number }
         | false;
@@ -56,8 +60,8 @@ export interface WaterLook {
 
 /**
  * O material da água pelo grafo: o dielétrico de índice `ior` com a transmissão (a absorção por metro como a cor a 1 m,
- * `exp(−absorção)`, e o Abbe) e as ondulações na normal da superfície (`surface.ripple` na posição, normal e tempo
- * simulado da amostra, até `closure.normal`).
+ * `exp(−absorção)`, e o Abbe) e, se pedidas, as ondulações na normal da superfície (`surface.ripple` na posição, normal
+ * e tempo simulado da amostra, até `closure.normal`).
  */
 export function waterLook(look: WaterLook = {}): MaterialFunction {
     const ior = look.ior ?? 1.333;
@@ -76,7 +80,7 @@ export function waterLook(look: WaterLook = {}): MaterialFunction {
         ['reflect.value', 'water.a'],
         ['transmit.value', 'water.b'],
     ];
-    if (look.ripple === false) return materialGraph(graph, links, 'water.value');
+    if (look.ripple === undefined || look.ripple === false) return materialGraph(graph, links, 'water.value');
     return materialGraph(
         {
             ...graph,
