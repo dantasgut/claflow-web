@@ -40,7 +40,7 @@ export interface WaterLook {
     /** Índice de refração (padrão 1,333). */
     readonly ior?: number;
     /**
-     * Número de Abbe da dispersão (padrão 0, sem dispersão — decisão do usuário, 2026-10-29: no respingo as cores se
+     * Número de Abbe da dispersão (padrão 0, sem dispersão — escolha do agente, 2026-10-29, aceita pelo usuário porque com 55,7 a água ficava descaracterizada; o exagero é do motor, não da física — a separação das cores na água é de frações de grau: no respingo as cores se
      * separam abaixo do pixel e, traçadas com uma amostra por canal, viravam pontos coloridos; a água real é 55,7).
      */
     readonly abbe?: number;
