@@ -314,6 +314,26 @@ export const SHOTS: Record<string, Shot> = {
             return () => undefined;
         },
     },
+    molharperto: {
+        frames: 360,
+        build(app) {
+            // A barragem da `molhar` vista de perto (a 35 cm da parede de vidro da frente, spec 034 T066d): as gotas que
+            // a água deixa no vidro, cada uma uma lente do quadriculado atrás, e os filetes que descem.
+            waterScene(app, {
+                width: W,
+                height: H,
+                box: true,
+                eye: [0.25, 0.32, 0.75],
+                target: [0.1, 0.22, 0.4],
+                surfaces: {
+                    floor: clayflow.SurfacePhysics.CONCRETE,
+                    walls: clayflow.SurfacePhysics.GLASS,
+                    box: clayflow.SurfacePhysics.BRICK,
+                },
+            });
+            return () => undefined;
+        },
+    },
     causticasvidro: {
         frames: 360,
         build(app) {
