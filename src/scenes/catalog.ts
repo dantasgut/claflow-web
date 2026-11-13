@@ -307,7 +307,7 @@ export const SHOTS: Record<string, Shot> = {
                 eye: [1.3, 1.25, 1.9],
                 surfaces: {
                     floor: clayflow.SurfacePhysics.CONCRETE,
-                    walls: clayflow.SurfacePhysics.GLASS,
+                    walls: clayflow.SurfacePhysics.WINDOW_GLASS,
                     box: clayflow.SurfacePhysics.BRICK,
                 },
             });
@@ -317,18 +317,22 @@ export const SHOTS: Record<string, Shot> = {
     molharperto: {
         frames: 360,
         build(app) {
-            // A barragem da `molhar` vista de perto (a 12 cm da parede de vidro da frente, spec 034 T066d — a escala de
-            // uma foto de vidro molhado: a gota de 2 mm cobre ~10 pixels): as gotas que a água deixa no vidro, cada uma
-            // uma lente do quadriculado atrás, e os filetes que descem.
+            // A barragem vista de perto (a 12 cm da parede de vidro da frente, spec 034 T066d — a escala de uma foto de
+            // vidro molhado: a gota de 2 mm cobre ~10 pixels). A barragem é mais baixa que a da `molhar` (16 × 40 × 32:
+            // a água assenta a ~0,24 m) e a câmera olha a parede acima da linha d'água: a onda sobe pelo vidro, desce e
+            // deixa nele as gotas — cada uma uma lente do quadriculado atrás — e os filetes que descem. Com a barragem
+            // da `molhar`, a água assenta a ~0,45 m e a parede na vista fica submersa: sem película (a do lado de dentro
+            // é a própria água do tanque).
             waterScene(app, {
                 width: W,
                 height: H,
                 box: true,
-                eye: [0.2, 0.3, 0.53],
-                target: [0.12, 0.25, 0.4],
+                dam: [16, 40, 32],
+                eye: [0.2, 0.37, 0.53],
+                target: [0.12, 0.34, 0.4],
                 surfaces: {
                     floor: clayflow.SurfacePhysics.CONCRETE,
-                    walls: clayflow.SurfacePhysics.GLASS,
+                    walls: clayflow.SurfacePhysics.WINDOW_GLASS,
                     box: clayflow.SurfacePhysics.BRICK,
                 },
             });
