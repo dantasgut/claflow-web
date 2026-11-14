@@ -526,16 +526,53 @@ export const SHOTS: Record<string, Shot> = {
                     .add(new StandardMaterial({ albedo: [0.7, 0.65, 0.5, 1], roughness: 0.9 }))
                     .add(
                         new clayflow.MaterialFunction({
-                            code: `fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) -> Closure {
+                            // O chão em várias escalas, por pixel: manchas de grama seca (~1,4 m), touceiras (~17 cm) e
+                            // o grão (~1,7 cm), cada oitava apagada quando o comprimento de onda dela cai abaixo de 3 pixels (a pegada `s.footprint`;
+                            // some de vez em 1,5), e as
+                            // bordas da areia, da grama e da rocha recortadas pelo mesmo ruído.
+                            code: `fn nat_hash(c: vec2f) -> f32 {
+    var p3 = fract(vec3f(c.x, c.y, c.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+fn nat_noise(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(nat_hash(i), nat_hash(i + vec2f(1.0, 0.0)), u.x);
+    let b = mix(nat_hash(i + vec2f(0.0, 1.0)), nat_hash(i + vec2f(1.0, 1.0)), u.x);
+    return mix(a, b, u.y) * 2.0 - 1.0;
+}
+fn nat_fbm(p: vec2f, scale: f32, footprint: f32) -> f32 {
+    var sum = 0.0;
+    var norm = 0.0;
+    var amp = 0.5;
+    var f = scale;
+    for (var k = 0u; k < 5u; k++) {
+        let w = select(1.0, clamp((1.0 / (f * footprint) - 1.5) / 1.5, 0.0, 1.0), footprint > 0.0);
+        sum += amp * w * nat_noise(p * f + vec2f(f32(k) * 17.3, f32(k) * 7.1));
+        norm += amp;
+        amp *= 0.5;
+        f *= 2.03;
+    }
+    return sum / norm;
+}
+fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) -> Closure {
+    let xz = s.world_position.xz;
     let y = s.world_position.y;
     let slope = 1.0 - clamp(s.normal.y, 0.0, 1.0);
-    let grain = fract(sin(dot(floor(s.world_position.xz * 60.0), vec2f(12.9898, 78.233))) * 43758.5453);
-    let sand = vec3f(0.74, 0.67, 0.5) * (0.92 + 0.08 * grain);
-    let grass = vec3f(0.22, 0.34, 0.12) * (0.85 + 0.15 * grain);
-    let rock = vec3f(0.42, 0.4, 0.38) * (0.9 + 0.1 * grain);
-    var c = mix(sand, grass, smoothstep(-0.25, -0.05, y));
-    c = mix(c, rock, smoothstep(0.25, 0.45, slope));
-    return closure_diffuse(c, 0.0);
+    let big = nat_fbm(xz, 0.7, s.footprint);
+    let mid = nat_fbm(xz + vec2f(31.0, 5.0), 6.0, s.footprint);
+    let fine = nat_fbm(xz + vec2f(3.0, 47.0), 60.0, s.footprint);
+    let sand = vec3f(0.74, 0.67, 0.5) * (1.0 + 0.06 * mid + 0.14 * fine);
+    let lush = vec3f(0.13, 0.24, 0.06);
+    let dry = vec3f(0.3, 0.3, 0.12);
+    let grass = mix(lush, dry, smoothstep(0.2, 0.65, big)) * (1.0 + 0.35 * mid + 0.5 * fine);
+    let rock = vec3f(0.42, 0.4, 0.38) * (1.0 + 0.25 * mid + 0.3 * fine);
+    let edge = y + 0.06 * mid + 0.04 * big;
+    var c = mix(sand, grass, smoothstep(-0.17, -0.12, edge));
+    c = mix(c, rock, smoothstep(0.28, 0.38, slope + 0.05 * mid));
+    return closure_diffuse(clamp(c, vec3f(0.0), vec3f(1.0)), 0.0);
 }`,
                         }),
                     )
