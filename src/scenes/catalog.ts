@@ -706,17 +706,18 @@ fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) ->
                 );
                 velocity.push(1, 0, 0);
             }
+            // Os sprites projetam sombra (opção do material: por padrão, sprites e linhas não projetam).
+            const dots = new clayflow.PointSpriteMaterial({ color: [1, 0.8, 0.2, 1], radius: 0.04 });
+            dots.castsShadow = true;
             app.world.insert(
-                new clayflow.FluidBody({ algorithm: 'SPH', position, velocity }).add(
-                    new clayflow.PointSpriteMaterial({ color: [1, 0.8, 0.2, 1], radius: 0.04 }),
-                ),
+                new clayflow.FluidBody({ algorithm: 'SPH', position, velocity }).add(dots),
             );
             const ball = new Transform({ position: [0, 0.4, 0, 1] });
+            const beads = new clayflow.PointSpriteMaterial({ color: [0.2, 0.6, 1, 1], radius: 0.03 });
+            beads.castsShadow = true;
             app.world.insert(
                 new SphereGeometry({ radius: 0.25, latSegments: 8, lonSegments: 16 })
-                    .add(
-                        new clayflow.PointSpriteMaterial({ color: [0.2, 0.6, 1, 1], radius: 0.03 }),
-                    )
+                    .add(beads)
                     .add(ball),
             );
             camera(app, 0.8, [0, 1, 3], [0, 0.4, 0]);
