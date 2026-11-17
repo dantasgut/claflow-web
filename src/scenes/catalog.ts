@@ -255,9 +255,10 @@ export const SHOTS: Record<string, Shot> = {
     pordosol: {
         frames: 480,
         build(app) {
-            // O sol descendo de 12° a 1° atrás das nuvens (spec 041).
+            // O sol descendo de 12° a 1° atrás das nuvens (spec 041), a câmera olhando para ele (o azimute do sol é
+            // (0,8; 0,6): de costas para o sol, o céu baixo não fica laranja).
             cloudGround(app);
-            const { sun } = cloudSky(app, 12, { coverage: 0.45, type: 0.55, wind: [8, 0] }, [0, 2, 0], [-1000, 200, -600]);
+            const { sun } = cloudSky(app, 12, { coverage: 0.45, type: 0.55, wind: [8, 0] }, [0, 2, 0], [800, 130, 600]);
             return (i) => {
                 const e = ((12 - 11 * (i / 479)) * Math.PI) / 180;
                 sun.data.direction = [-Math.cos(e) * 0.8, -Math.sin(e), -Math.cos(e) * 0.6, 0];
