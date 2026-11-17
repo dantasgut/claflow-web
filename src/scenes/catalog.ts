@@ -5,7 +5,7 @@
 // agitada vista de cima, fundo de areia), natureza (vale com relevo, céu, luz global e o lago), cornell (caixa de Cornell
 // com a luz global), dia (cômodo com janela, o sol andando), nevoa (o mesmo cômodo com névoa), pano (tecido XPBD), sprites
 // (partículas e os vértices de uma esfera como sprites), ondulacao (lâmina de água com ondulações e a esfera de vidro
-// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, voo, sombrasnuvens). O tamanho vem da URL (`?w=`, `?h=`; padrão 1280 × 720).
+// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, voo, sombrasnuvens). O tamanho vem da URL (`?w=`, `?h=`; padrão 1280 × 720).
 import * as clayflow from 'clayflow/web';
 import {
     Application,
@@ -47,6 +47,11 @@ const SPIN = q.has('girar') ? Number(q.get('girar') || 0.3) : 0;
 /** Uma cena: quadros padrão e a montagem, que devolve o movimento por quadro. */
 export interface Shot {
     readonly frames: number;
+    /**
+     * Quadros simulados antes da gravação, parados no primeiro (o histórico que converge com o tempo: o cache de
+     * espalhamento das nuvens soma um caminho por sonda a cada 8 quadros).
+     */
+    readonly warmup?: number;
     build(app: Application): (i: number) => void;
 }
 
@@ -199,6 +204,50 @@ function rippledWater(app: Application, size: Vec3, center: Vec3): void {
     );
 }
 
+/**
+ * Exposição (EV, multiplicador 2^EV) de um fotômetro de luz incidente (C = 250, padrão de ponto médio de 18 %) pela
+ * elevação do sol: o EV100 da iluminância horizontal no chão (o sol pela transmitância e o céu pela integral da radiância,
+ * na atmosfera de referência f64 do motor, `scene/reference/atmosphere.ts`; 100 000 lx no topo), `0,526 − EV100`. Ao meio
+ * dia, −14,47 (a regra do "sunny 16", EV100 15). Abaixo de 8°, a câmera acompanha só 15 % da queda: com o sol baixo na
+ * frente, o fotógrafo expõe para o céu (o fotômetro de luz incidente levaria o pôr do sol ao brilho do dia e lavaria a
+ * cor; o olho também não se adapta por inteiro).
+ */
+const METER: readonly (readonly [number, number])[] = [
+    [-4, -3.69],
+    [-3, -5.05],
+    [-2, -6.18],
+    [-1, -7.1],
+    [0, -7.81],
+    [1, -8.5],
+    [2, -9.12],
+    [4, -10.1],
+    [6, -10.81],
+    [8, -11.33],
+    [12, -12.07],
+    [20, -12.95],
+    [30, -13.59],
+    [40, -13.99],
+    [60, -14.47],
+    [90, -14.7],
+];
+
+function meterExposure(elevation: number): number {
+    const e = Math.min(90, Math.max(-4, elevation));
+    let k = 0;
+    while (k < METER.length - 2 && METER[k + 1]![0] < e) k++;
+    const [e0, x0] = METER[k]!;
+    const [e1, x1] = METER[k + 1]!;
+    const meter = x0 + ((x1 - x0) * (e - e0)) / (e1 - e0);
+    const at8 = -11.33;
+    return e >= 8 ? meter : at8 + 0.15 * (meter - at8);
+}
+
+/**
+ * Extinção das nuvens das cenas (1/m na densidade 1): a de um cúmulo com ~0,4 g/m³ de água líquida e gotículas de 20 µm
+ * (`3·LWC/(2·ρ·r)` ≈ 0,06/m na densidade média da forma, ~0,7). O padrão da camada (0,04) é o de nuvens mais finas.
+ */
+const CUMULUS_DENSITY = 0.08;
+
 /** O céu físico e a camada de nuvens (spec 041) com o sol a `elevation` graus e a câmera em `eye` olhando `target`. */
 function cloudSky(
     app: Application,
@@ -206,26 +255,33 @@ function cloudSky(
     values: clayflow.CloudLayerValues,
     eye: Vec3,
     target: Vec3,
-): { sun: clayflow.DirectionalLight; move: (p: Vec3, t: Vec3) => void } {
-    const e = (elevation * Math.PI) / 180;
+): { sun: clayflow.DirectionalLight; move: (p: Vec3, t: Vec3) => void; setSun: (elevation: number) => void } {
+    const direction = (el: number): [number, number, number, number] => {
+        const e = (el * Math.PI) / 180;
+        return [-Math.cos(e) * 0.8, -Math.sin(e), -Math.cos(e) * 0.6, 0];
+    };
     const sun = new clayflow.DirectionalLight({
-        direction: [-Math.cos(e) * 0.8, -Math.sin(e), -Math.cos(e) * 0.6, 0],
+        direction: direction(elevation),
         intensity: 100_000,
         castShadow: true,
     });
     app.world.insert(sun);
     app.world.insert(new clayflow.Sky({ sun }));
-    app.world.insert(new clayflow.CloudLayer(values));
+    app.world.insert(new clayflow.CloudLayer({ density: CUMULUS_DENSITY, ...values }));
     const view = new Transform({ position: [...eye, 1], rotation: Transform.lookRotation(eye, target) });
     app.world.insert(
         new clayflow.Camera({ fov: Math.PI / 3, aspect: W / H, aspectMode: 'fixed', near: 0.5, far: 200_000 }).add(view),
     );
-    app.defaults.renderer.output.data.exposure = -13;
+    app.defaults.renderer.output.data.exposure = meterExposure(elevation);
     return {
         sun,
         move: (p, t) => {
             view.data.position = [...p, 1];
             view.data.rotation = Transform.lookRotation(p, t);
+        },
+        setSun: (el) => {
+            sun.data.direction = direction(el);
+            app.defaults.renderer.output.data.exposure = meterExposure(el);
         },
     };
 }
@@ -242,6 +298,7 @@ function cloudGround(app: Application): void {
 export const SHOTS: Record<string, Shot> = {
     nuvens: {
         frames: 480,
+        warmup: 600,
         build(app) {
             // Meio dia (spec 041): cúmulos com vento, a câmera no chão girando do horizonte para o alto.
             cloudGround(app);
@@ -254,19 +311,40 @@ export const SHOTS: Record<string, Shot> = {
     },
     pordosol: {
         frames: 480,
+        warmup: 600,
         build(app) {
             // O sol descendo de 12° a 1° atrás das nuvens (spec 041), a câmera olhando para ele (o azimute do sol é
-            // (0,8; 0,6): de costas para o sol, o céu baixo não fica laranja).
+            // (0,8; 0,6): de costas para o sol, o céu baixo não fica laranja); a exposição pelo fotômetro.
             cloudGround(app);
-            const { sun } = cloudSky(app, 12, { coverage: 0.45, type: 0.55, wind: [8, 0] }, [0, 2, 0], [800, 130, 600]);
+            const { setSun } = cloudSky(app, 12, { coverage: 0.45, type: 0.55, wind: [8, 0] }, [0, 2, 0], [800, 130, 600]);
+            return (i) => setSun(12 - 11 * (i / 479));
+        },
+    },
+    solposto: {
+        frames: 1200,
+        warmup: 600,
+        build(app) {
+            // Do meio dia até abaixo do horizonte (spec 041): o sol desce de 60° a −4° no azimute (0,8; 0,6), a câmera no
+            // chão olhando para o lado dele, um pouco acima do horizonte (o céu passa do azul ao laranja e ao vermelho, as
+            // nuvens recebem a luz alaranjada e ficam contra o céu); a exposição pelo fotômetro.
+            cloudGround(app);
+            const { setSun } = cloudSky(
+                app,
+                60,
+                { coverage: 0.4, type: 0.5, wind: [6, 2] },
+                [0, 2, 0],
+                [800, 260, 600],
+            );
             return (i) => {
-                const e = ((12 - 11 * (i / 479)) * Math.PI) / 180;
-                sun.data.direction = [-Math.cos(e) * 0.8, -Math.sin(e), -Math.cos(e) * 0.6, 0];
+                const t = i / 1199;
+                // Mais tempo perto do horizonte (onde a cor muda): a elevação desce pela raiz do tempo invertida.
+                setSun(-4 + 64 * (1 - t) ** 1.6);
             };
         },
     },
     voo: {
         frames: 600,
+        warmup: 600,
         build(app) {
             // Do chão até acima da camada (spec 041): céu com nuvens, névoa densa dentro, mar de nuvens de cima.
             cloudGround(app);
@@ -286,6 +364,7 @@ export const SHOTS: Record<string, Shot> = {
     },
     sombrasnuvens: {
         frames: 480,
+        warmup: 600,
         build(app) {
             // As sombras das nuvens correndo pelo chão com vento forte, a água de um lago (o reflexo das nuvens) e uma
             // esfera de vidro (a refração das nuvens) (spec 041).

@@ -71,6 +71,12 @@ async function main(): Promise<void> {
     const update = shot.build(app);
     update(0);
     await app.whenReady({ timeoutMs: 120_000 });
+    // O aquecimento: quadros parados no primeiro, sem gravar (cada um espera o quadro apresentado, sem empilhar).
+    for (let i = 0; i < (shot.warmup ?? 0); i++) {
+        update(0);
+        app.step(1 / 60);
+        await app.core.readCanvas();
+    }
     for (let i = 0; i < frames; i++) {
         update(i);
         app.step(1 / 60);
