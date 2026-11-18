@@ -351,24 +351,35 @@ function cloudSky(
 }
 
 /**
- * O tempo acelerado da `tempestade` (spec 041, R19): a escala do relógio (1 quadro de 1/60 s = 4 s: 4 h em 60 s) e o
- * passo fixo igual a um quadro (o tempo simulado anda um passo por quadro, sem o teto de passos cortar o tempo). A 18 s
- * por quadro (a primeira gravação) as nuvens andavam 100–250 m e mudavam de forma a cada quadro: a reconstrução temporal
- * largava o histórico e as bordas finas saíam granuladas; a 4 s, 25–55 m.
+ * O tempo acelerado da `tempestade` (spec 041, R19): a escala do relógio (1 quadro de 1/60 s = 2 s: 4 h em 120 s) e o
+ * passo fixo igual a um quadro (o tempo simulado anda um passo por quadro, sem o teto de passos cortar o tempo). A
+ * reconstrução temporal das nuvens junta ~7 amostras por pixel (a média exponencial de peso 0,25, cada pixel marchado a
+ * cada 4 quadros): com a nuvem mudando a cada quadro ela não acumula, e as bordas ralas ficam com o ruído de uma amostra
+ * (medido na borda de baixo de um cúmulo, o passa-alta 5 × 5: 0,96 a 4 s por quadro, 0,77 a 2 s, 0,64 a 1 s; a 1/60 s,
+ * liso em 60 quadros). A 18 s por quadro (a primeira gravação) as nuvens andavam 100–250 m por quadro.
  */
-const STORM_TIME = 240;
+const STORM_TIME = 120;
 
 /**
  * O campo de pressão da `tempestade` (WGSL do ponto `cloud_pressure`, no referencial que anda com o vento de condução):
- * uma baixa de mesoescala (σ = 30 km) que se aprofunda de 0 a 4 hPa entre 1 h e 4 h de tempo simulado. O centro no
- * referencial (−57,6 km; −55 km) passa no mundo de x = −43 km a +43 km durante a gravação (40 min a 4 h 40 min, o vento
- * de condução de 6 m/s para leste), 55 km ao norte da câmera (norte = −z): a subida até ~42 km do centro, a câmera no anel
- * de subsidência.
+ * uma baixa de mesoescala (σ = 12 km: a subida até ~17 km do centro, o tamanho de um sistema convectivo) que se aprofunda
+ * de 0 a 1,5 hPa entre 1 h e 4 h de tempo simulado. O vento de condução (3,7 m/s de oeste, `STORM_WIND`) traz o
+ * centro de 65 km (40 min, o início da gravação) a 12 km (4 h 40, o fim: a câmera debaixo da bigorna) da câmera, na
+ * direção em que ela olha (a leste, `STORM_VIEW`); o centro no referencial é o do mundo aos 40 min menos o vento × 40
+ * min.
  */
 const STORM_PRESSURE = `fn pressure_fn(xz: vec2f, time: f32, data: PressureFnParams) -> f32 {
-    let d = xz - vec2f(-57600.0, -55000.0);
-    return -400.0 * smoothstep(3600.0, 14400.0, time) * exp(-dot(d, d) / 1.8e9);
+    let d = xz - vec2f(71912.0, -16759.0);
+    return -150.0 * smoothstep(3600.0, 14400.0, time) * exp(-dot(d, d) / 2.88e8);
 }`;
+
+/**
+ * A direção (x, z) em que a câmera da `tempestade` olha: 50° à esquerda do azimute do sol (fora do quadro, atrás e à
+ * direita da torre: o lado dela virado para a câmera fica na sombra, e a bigorna que chega fica entre o sol e o chão).
+ */
+const STORM_VIEW: [number, number] = [0.974, -0.227];
+/** O vento de condução da `tempestade` (m/s): 3,7 m/s vindo da direção da torre, que se aproxima. */
+const STORM_WIND: [number, number] = [-3.584, 0.835];
 
 /** Lago escavado no terreno das nuvens: o centro (x, z), a meia largura da caixa de água (m) e a cota da borda (m). */
 interface TerrainLake {
@@ -645,37 +656,43 @@ export const SHOTS: Record<string, Shot> = {
         },
     },
     tempestade: {
-        frames: 3600,
-        warmup: 600,
+        frames: 7200,
+        warmup: 1200,
         build(app) {
-            // Uma tempestade se formando numa baixa sobre o terreno gramado (spec 041, R19), vista de longe, com a câmera
-            // parada e o tempo acelerado (`STORM_TIME`: o aquecimento cobre os 40 min antes, a gravação de 40 min a 4 h 40). Os
-            // cúmulos rasos do tempo bom (cobertura 0,3, topo a 2,8 km); a baixa a 55 km ao norte se aprofunda: a
-            // convergência dela sobe o ar e os cúmulos viram cúmulos-nimbos até a tropopausa (11 km), com a bigorna; em
-            // volta o ar desce e o céu da câmera limpa; o vento gira em volta da baixa (anti-horário, 40° N) e a leva para
-            // leste. O sol a 35° de sudeste (atrás e à direita da câmera, que olha para o norte).
+            // Uma tempestade se formando numa baixa sobre o terreno gramado (spec 041, R19) e chegando à câmera, com o
+            // tempo acelerado (`STORM_TIME`: o aquecimento cobre os 40 min antes, a gravação de 40 min a 4 h 40). Os cúmulos
+            // rasos do tempo bom (cobertura 0,3, topo a 2,8 km); a baixa se aprofunda a 65 km: a convergência sobe o ar e
+            // as células mais fortes viram cúmulos-nimbos até a tropopausa (11 km), com a água da torre (a base escura) e,
+            // depois, a bigorna de gelo levada pelo vento da alta troposfera (5 × o de condução: 18 m/s) à frente do sistema,
+            // por cima da câmera; no fim o centro está a 12 km e a câmera debaixo do sistema — o céu escurece e a
+            // sombra dela chega pelo terreno. A câmera a 60 m sobre as colinas (o
+            // chão visível vai de ~200 m a ~6 km: a sombra de uma nuvem anda pelo terreno, não cobre o chão inteiro de uma
+            // vez como na câmera a 2 m, que via só os primeiros metros) olhando a leste, 12° para cima; o sol de fim de
+            // tarde a 20°, 50° à direita da torre (fora do quadro): o lado dela virado para a câmera fica na sombra.
             app.time.scale = STORM_TIME;
             app.time.fixedDt = STORM_TIME / 60;
             cloudTerrain(app);
+            const eye: Vec3 = [0, 60, 0];
             cloudSky(
                 app,
-                35,
+                20,
                 {
                     coverage: 0.3,
                     type: 0.5,
                     base: 1200,
                     top: 2800,
-                    wind: [6, 0],
+                    wind: STORM_WIND,
                     weather: {
                         latitude: 40,
                         scale: 192_000,
                         formation: 1800,
                         tropopause: 11_000,
+                        shear: 5,
                         pressure: { code: STORM_PRESSURE },
                     },
                 },
-                [0, 2, 0],
-                [0, 200, -1000],
+                eye,
+                [STORM_VIEW[0] * 1000, 60 + 213, STORM_VIEW[1] * 1000],
             );
             return () => {};
         },
