@@ -5,7 +5,8 @@
 // agitada vista de cima, fundo de areia), natureza (vale com relevo, céu, luz global e o lago), cornell (caixa de Cornell
 // com a luz global), dia (cômodo com janela, o sol andando), nevoa (o mesmo cômodo com névoa), pano (tecido XPBD), sprites
 // (partículas e os vértices de uma esfera como sprites), ondulacao (lâmina de água com ondulações e a esfera de vidro
-// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, solpostolento, voo, sombrasnuvens). O tamanho vem da URL (`?w=`, `?h=`; padrão 1280 × 720).
+// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, solpostolento, voo, sombrasnuvens,
+// tempestade). O tamanho vem da URL (`?w=`, `?h=`; padrão 1280 × 720).
 import * as clayflow from 'clayflow/web';
 import {
     Application,
@@ -357,6 +358,23 @@ function cloudSky(
     };
 }
 
+/**
+ * O tempo acelerado da `tempestade` (spec 041, R18): a escala do relógio (1 quadro de 1/60 s = 18 s: 6 h em 20 s) e o
+ * passo fixo igual a um quadro (o tempo simulado anda um passo por quadro, sem o teto de passos cortar o tempo).
+ */
+const STORM_TIME = 1080;
+
+/**
+ * O campo de pressão da `tempestade` (WGSL do ponto `cloud_pressure`, no referencial que anda com o vento de condução):
+ * uma baixa de mesoescala (σ = 30 km) que se aprofunda de 0 a 4 hPa entre 3 h e 7 h de tempo simulado. O centro no
+ * referencial (−129,6 km; −70 km) passa no mundo de x = −65 km a +65 km durante a gravação (3 h a 9 h, o vento de
+ * condução de 6 m/s para leste), 70 km ao norte da câmera (norte = −z).
+ */
+const STORM_PRESSURE = `fn pressure_fn(xz: vec2f, time: f32, data: PressureFnParams) -> f32 {
+    let d = xz - vec2f(-129600.0, -70000.0);
+    return -400.0 * smoothstep(10800.0, 25200.0, time) * exp(-dot(d, d) / 1.8e9);
+}`;
+
 /** Lago escavado no terreno das nuvens: o centro (x, z), a meia largura da caixa de água (m) e a cota da borda (m). */
 interface TerrainLake {
     readonly center: readonly [number, number];
@@ -574,6 +592,42 @@ export const SHOTS: Record<string, Shot> = {
                 const y = 2 + 5500 * t * t;
                 move([400 * t, y, 0], [400 * t + 1000, y + 600 - 900 * t, 200]);
             };
+        },
+    },
+    tempestade: {
+        frames: 1200,
+        warmup: 600,
+        build(app) {
+            // Uma tempestade se formando numa baixa sobre o terreno gramado (spec 041, R18), vista de longe, com a câmera
+            // parada e o tempo acelerado (`STORM_TIME`: o aquecimento cobre as 3 h antes, a gravação de 3 h a 9 h). Os
+            // cúmulos rasos do tempo bom (cobertura 0,3, topo a 2,8 km); a baixa a 70 km ao norte se aprofunda: a
+            // convergência dela sobe o ar e os cúmulos viram cúmulos-nimbos até a tropopausa (11 km), com a bigorna; em
+            // volta o ar desce e o céu da câmera limpa; o vento gira em volta da baixa (anti-horário, 40° N) e a leva para
+            // leste. O sol a 35° de sudeste (atrás e à direita da câmera, que olha para o norte).
+            app.time.scale = STORM_TIME;
+            app.time.fixedDt = STORM_TIME / 60;
+            cloudTerrain(app);
+            cloudSky(
+                app,
+                35,
+                {
+                    coverage: 0.3,
+                    type: 0.5,
+                    base: 1200,
+                    top: 2800,
+                    wind: [6, 0],
+                    weather: {
+                        latitude: 40,
+                        scale: 192_000,
+                        formation: 1800,
+                        tropopause: 11_000,
+                        pressure: { code: STORM_PRESSURE },
+                    },
+                },
+                [0, 2, 0],
+                [0, 200, -1000],
+            );
+            return () => {};
         },
     },
     sombrasnuvens: {
