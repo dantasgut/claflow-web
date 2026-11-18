@@ -351,20 +351,23 @@ function cloudSky(
 }
 
 /**
- * O tempo acelerado da `tempestade` (spec 041, R19): a escala do relógio (1 quadro de 1/60 s = 18 s: 6 h em 20 s) e o
- * passo fixo igual a um quadro (o tempo simulado anda um passo por quadro, sem o teto de passos cortar o tempo).
+ * O tempo acelerado da `tempestade` (spec 041, R19): a escala do relógio (1 quadro de 1/60 s = 4 s: 4 h em 60 s) e o
+ * passo fixo igual a um quadro (o tempo simulado anda um passo por quadro, sem o teto de passos cortar o tempo). A 18 s
+ * por quadro (a primeira gravação) as nuvens andavam 100–250 m e mudavam de forma a cada quadro: a reconstrução temporal
+ * largava o histórico e as bordas finas saíam granuladas; a 4 s, 25–55 m.
  */
-const STORM_TIME = 1080;
+const STORM_TIME = 240;
 
 /**
  * O campo de pressão da `tempestade` (WGSL do ponto `cloud_pressure`, no referencial que anda com o vento de condução):
- * uma baixa de mesoescala (σ = 30 km) que se aprofunda de 0 a 4 hPa entre 3 h e 7 h de tempo simulado. O centro no
- * referencial (−129,6 km; −70 km) passa no mundo de x = −65 km a +65 km durante a gravação (3 h a 9 h, o vento de
- * condução de 6 m/s para leste), 70 km ao norte da câmera (norte = −z).
+ * uma baixa de mesoescala (σ = 30 km) que se aprofunda de 0 a 4 hPa entre 1 h e 4 h de tempo simulado. O centro no
+ * referencial (−57,6 km; −55 km) passa no mundo de x = −43 km a +43 km durante a gravação (40 min a 4 h 40 min, o vento
+ * de condução de 6 m/s para leste), 55 km ao norte da câmera (norte = −z): a subida até ~42 km do centro, a câmera no anel
+ * de subsidência.
  */
 const STORM_PRESSURE = `fn pressure_fn(xz: vec2f, time: f32, data: PressureFnParams) -> f32 {
-    let d = xz - vec2f(-129600.0, -70000.0);
-    return -400.0 * smoothstep(10800.0, 25200.0, time) * exp(-dot(d, d) / 1.8e9);
+    let d = xz - vec2f(-57600.0, -55000.0);
+    return -400.0 * smoothstep(3600.0, 14400.0, time) * exp(-dot(d, d) / 1.8e9);
 }`;
 
 /** Lago escavado no terreno das nuvens: o centro (x, z), a meia largura da caixa de água (m) e a cota da borda (m). */
@@ -642,12 +645,12 @@ export const SHOTS: Record<string, Shot> = {
         },
     },
     tempestade: {
-        frames: 1200,
+        frames: 3600,
         warmup: 600,
         build(app) {
             // Uma tempestade se formando numa baixa sobre o terreno gramado (spec 041, R19), vista de longe, com a câmera
-            // parada e o tempo acelerado (`STORM_TIME`: o aquecimento cobre as 3 h antes, a gravação de 3 h a 9 h). Os
-            // cúmulos rasos do tempo bom (cobertura 0,3, topo a 2,8 km); a baixa a 70 km ao norte se aprofunda: a
+            // parada e o tempo acelerado (`STORM_TIME`: o aquecimento cobre os 40 min antes, a gravação de 40 min a 4 h 40). Os
+            // cúmulos rasos do tempo bom (cobertura 0,3, topo a 2,8 km); a baixa a 55 km ao norte se aprofunda: a
             // convergência dela sobe o ar e os cúmulos viram cúmulos-nimbos até a tropopausa (11 km), com a bigorna; em
             // volta o ar desce e o céu da câmera limpa; o vento gira em volta da baixa (anti-horário, 40° N) e a leva para
             // leste. O sol a 35° de sudeste (atrás e à direita da câmera, que olha para o norte).
