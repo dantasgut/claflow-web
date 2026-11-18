@@ -359,7 +359,7 @@ function cloudSky(
 }
 
 /**
- * O tempo acelerado da `tempestade` (spec 041, R18): a escala do relógio (1 quadro de 1/60 s = 18 s: 6 h em 20 s) e o
+ * O tempo acelerado da `tempestade` (spec 041, R19): a escala do relógio (1 quadro de 1/60 s = 18 s: 6 h em 20 s) e o
  * passo fixo igual a um quadro (o tempo simulado anda um passo por quadro, sem o teto de passos cortar o tempo).
  */
 const STORM_TIME = 1080;
@@ -598,7 +598,7 @@ export const SHOTS: Record<string, Shot> = {
         frames: 1200,
         warmup: 600,
         build(app) {
-            // Uma tempestade se formando numa baixa sobre o terreno gramado (spec 041, R18), vista de longe, com a câmera
+            // Uma tempestade se formando numa baixa sobre o terreno gramado (spec 041, R19), vista de longe, com a câmera
             // parada e o tempo acelerado (`STORM_TIME`: o aquecimento cobre as 3 h antes, a gravação de 3 h a 9 h). Os
             // cúmulos rasos do tempo bom (cobertura 0,3, topo a 2,8 km); a baixa a 70 km ao norte se aprofunda: a
             // convergência dela sobe o ar e os cúmulos viram cúmulos-nimbos até a tropopausa (11 km), com a bigorna; em
