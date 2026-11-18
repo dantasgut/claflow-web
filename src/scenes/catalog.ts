@@ -357,11 +357,138 @@ function cloudSky(
     };
 }
 
-/** Um chão de 4 km (o terreno das sombras das nuvens). */
-function cloudGround(app: Application): void {
+/** Lago escavado no terreno das nuvens: o centro (x, z), a meia largura da caixa de água (m) e a cota da borda (m). */
+interface TerrainLake {
+    readonly center: readonly [number, number];
+    readonly half: number;
+    readonly rim: number;
+}
+
+/**
+ * O terreno das cenas das nuvens (spec 041): colinas suaves até o horizonte pela função de superfície (ruído de valor em
+ * cinco oitavas, de 1,6 km a ~100 m, e lombas de 15–60 m), planas na origem (a câmera a 2 m do chão) e mais altas com a
+ * distância — ±2 m no pasto perto, até ~60 m a 4–6 km, menos de 1° acima do horizonte: o relevo não tapa o céu. Malha adaptativa na GPU
+ * (o domínio esticado: segmentos de ~0,5 m perto da origem e ~20 m na borda). Coberto de gramado pelo material por pixel
+ * (o mesmo caminho da `natureza`): manchas de grama verde e seca de ~25 m e de ~250 m, touceiras de ~40 cm e o grão de
+ * ~4 cm, cada oitava apagada quando cai abaixo de 3 pixels (a pegada `s.footprint`), e terra onde a encosta é íngreme. A
+ * sombra das nuvens chega por `light_transmission`, como em toda superfície. Com `lake`, uma bacia redonda dentro
+ * da caixa de água (o terreno em volta acima da água: as paredes e os cantos da caixa enterrados).
+ */
+function cloudTerrain(app: Application, lake?: TerrainLake): void {
+    const HALF = 6000;
+    const lakeCode =
+        lake === undefined
+            ? ''
+            : `    let ld = length(p - vec2f(${lake.center[0].toFixed(1)}, ${lake.center[1].toFixed(1)}));
+    // Em volta do lago (até além dos cantos da caixa) o chão fica acima da borda da água; dentro, a bacia redonda.
+    h = mix(max(h, ${lake.rim.toFixed(2)}), h, smoothstep(${(lake.half * 1.5).toFixed(1)}, ${(lake.half * 2).toFixed(1)}, ld));
+    h = mix(-1.6, h, smoothstep(${(lake.half - 10).toFixed(1)}, ${(lake.half - 3.5).toFixed(1)}, ld));
+`;
     app.world.insert(
-        new clayflow.PlaneGeometry({ size: [4000, 4000] })
-            .add(new clayflow.StandardMaterial({ albedo: [0.32, 0.38, 0.26, 1], roughness: 0.95 }))
+        new clayflow.ParametricSurface({
+            domain: [-1, 1, -1, 1],
+            adaptive: { patches: [48, 48], maxLevel: 5, screen: 0.01, tolerance: 0.05, refreshDistance: 1 },
+        })
+            .add(
+                new clayflow.SurfaceFunction({
+                    code: `fn tr_hash(c: vec2f) -> f32 {
+    var p3 = fract(vec3f(c.x, c.y, c.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+fn tr_noise(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    let a = mix(tr_hash(i), tr_hash(i + vec2f(1.0, 0.0)), u.x);
+    let b = mix(tr_hash(i + vec2f(0.0, 1.0)), tr_hash(i + vec2f(1.0, 1.0)), u.x);
+    return mix(a, b, u.y) * 2.0 - 1.0;
+}
+fn surface_fn(u: f32, v: f32, time: f32, data: SurfaceFnParams) -> vec3f {
+    // O domínio [−1, 1]² esticado para o mundo (x = v, z = u, a normal da malha para cima): x = L·(c·v + (1 − c)·v³) —
+    // a grade densa perto da origem (segmentos de ~0,5 m: a margem do lago e as lombas perto da câmera) e larga longe
+    // (~20 m na borda, a 6 km), com a mesma quantidade de vértices.
+    let c = 0.06;
+    let p = ${HALF}.0 * vec2f(c * v + (1.0 - c) * v * v * v, c * u + (1.0 - c) * u * u * u);
+    let r = length(p);
+    var n = 0.0;
+    var amp = 0.55;
+    var f = 1.0 / 1600.0;
+    for (var k = 0u; k < 5u; k++) {
+        n += amp * tr_noise(p * f + vec2f(f32(k) * 13.7, f32(k) * 5.3));
+        amp *= 0.48;
+        f *= 2.17;
+    }
+    // Lombas de 15–60 m de comprimento (±1,5 m), o que dá o chão irregular perto da câmera.
+    var bump = 0.0;
+    var ba = 1.5;
+    var bf = 1.0 / 60.0;
+    for (var k = 0u; k < 3u; k++) {
+        bump += ba * tr_noise(p * bf + vec2f(f32(k) * 7.9 + 40.0, f32(k) * 3.1 - 11.0));
+        ba *= 0.55;
+        bf *= 2.1;
+    }
+    // Pasto ondulado perto (±2 m), colinas longe (até ~60 m, acima do plano: a borda da malha fica acima do horizonte);
+    // plano em volta da origem (a câmera a 2 m do chão).
+    let far = smoothstep(1500.0, 4500.0, r);
+    let edge = smoothstep(${HALF - 1500}.0, ${HALF}.0, max(abs(p.x), abs(p.y)));
+    let near = smoothstep(6.0, 40.0, r);
+    let height = mix(4.0, 110.0, smoothstep(250.0, 4500.0, r)) * smoothstep(10.0, 90.0, r);
+    var h = height * (n + 0.4 * far) + near * bump + 25.0 * edge;
+${lakeCode}    return vec3f(p.x, h, p.y);
+}`,
+                }),
+            )
+            .add(new clayflow.StandardMaterial({ albedo: [0.2, 0.3, 0.1, 1], roughness: 0.95 }))
+            .add(
+                new clayflow.MaterialFunction({
+                    code: `fn gr_hash(c: vec2f) -> f32 {
+    var p3 = fract(vec3f(c.x, c.y, c.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+fn gr_noise(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(gr_hash(i), gr_hash(i + vec2f(1.0, 0.0)), u.x);
+    let b = mix(gr_hash(i + vec2f(0.0, 1.0)), gr_hash(i + vec2f(1.0, 1.0)), u.x);
+    return mix(a, b, u.y) * 2.0 - 1.0;
+}
+fn gr_fbm(p: vec2f, scale: f32, footprint: f32) -> f32 {
+    var sum = 0.0;
+    var norm = 0.0;
+    var amp = 0.5;
+    var f = scale;
+    for (var k = 0u; k < 5u; k++) {
+        let w = select(1.0, clamp((1.0 / (f * footprint) - 1.5) / 1.5, 0.0, 1.0), footprint > 0.0);
+        sum += amp * w * gr_noise(p * f + vec2f(f32(k) * 17.3, f32(k) * 7.1));
+        norm += amp;
+        amp *= 0.5;
+        f *= 2.03;
+    }
+    return sum / norm;
+}
+fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) -> Closure {
+    let xz = s.world_position.xz;
+    let slope = 1.0 - clamp(s.normal.y, 0.0, 1.0);
+    // Manchas de ~250 m e de ~25 m (verde e seca), touceiras de ~40 cm, o grão de ~4 cm.
+    let field = gr_fbm(xz, 0.004, s.footprint);
+    let spot = gr_fbm(xz + vec2f(31.0, 5.0), 0.04, s.footprint);
+    let clump = gr_fbm(xz + vec2f(3.0, 47.0), 2.5, s.footprint);
+    let grain = gr_fbm(xz + vec2f(71.0, 13.0), 25.0, s.footprint);
+    let lush = vec3f(0.06, 0.1, 0.035);
+    let green = vec3f(0.1, 0.14, 0.05);
+    let dry = vec3f(0.24, 0.22, 0.11);
+    var grass = mix(lush, green, smoothstep(-0.4, 0.4, field));
+    grass = mix(grass, dry, smoothstep(0.15, 0.6, spot + 0.3 * field));
+    grass *= 1.0 + 0.35 * clump + 0.45 * grain;
+    let soil = vec3f(0.3, 0.24, 0.16) * (1.0 + 0.3 * clump + 0.3 * grain);
+    let c = mix(grass, soil, smoothstep(0.3, 0.45, slope + 0.08 * clump));
+    return closure_diffuse(clamp(c, vec3f(0.0), vec3f(1.0)), 0.0);
+}`,
+                }),
+            )
             .add(new Transform()),
     );
 }
@@ -372,7 +499,7 @@ export const SHOTS: Record<string, Shot> = {
         warmup: 600,
         build(app) {
             // Meio dia (spec 041): cúmulos com vento, a câmera no chão girando do horizonte para o alto.
-            cloudGround(app);
+            cloudTerrain(app);
             const { move } = cloudSky(app, 60, { coverage: 0.5, type: 0.5, wind: [12, 3] }, [0, 2, 0], [1000, 300, 0]);
             return (i) => {
                 const a = (i / 479) * 0.9;
@@ -386,7 +513,7 @@ export const SHOTS: Record<string, Shot> = {
         build(app) {
             // O sol descendo de 12° a 1° atrás das nuvens (spec 041), a câmera olhando para ele (o azimute do sol é
             // (0,8; 0,6): de costas para o sol, o céu baixo não fica laranja); a exposição pelo fotômetro.
-            cloudGround(app);
+            cloudTerrain(app);
             const { setSun } = cloudSky(app, 12, { coverage: 0.45, type: 0.55, wind: [8, 0] }, [0, 2, 0], [800, 130, 600]);
             return (i) => setSun(12 - 11 * (i / 479));
         },
@@ -398,7 +525,7 @@ export const SHOTS: Record<string, Shot> = {
             // Do meio dia até abaixo do horizonte (spec 041): o sol desce de 60° a −4° no azimute (0,8; 0,6), a câmera no
             // chão olhando para o lado dele, um pouco acima do horizonte (o céu passa do azul ao laranja e ao vermelho, as
             // nuvens recebem a luz alaranjada e ficam contra o céu); a exposição pelo fotômetro.
-            cloudGround(app);
+            cloudTerrain(app);
             const { setSun } = cloudSky(
                 app,
                 60,
@@ -418,7 +545,7 @@ export const SHOTS: Record<string, Shot> = {
         warmup: 600,
         build(app) {
             // O `solposto` mais devagar (spec 041): o sol desce de 20° a −4° em 60 s, linear (0,4°/s, ~100 × o real).
-            cloudGround(app);
+            cloudTerrain(app);
             const { setSun } = cloudSky(
                 app,
                 20,
@@ -434,7 +561,7 @@ export const SHOTS: Record<string, Shot> = {
         warmup: 600,
         build(app) {
             // Do chão até acima da camada (spec 041): céu com nuvens, névoa densa dentro, mar de nuvens de cima.
-            cloudGround(app);
+            cloudTerrain(app);
             const { move } = cloudSky(
                 app,
                 40,
@@ -453,12 +580,20 @@ export const SHOTS: Record<string, Shot> = {
         frames: 480,
         warmup: 600,
         build(app) {
-            // As sombras das nuvens correndo pelo chão com vento forte, a água de um lago (o reflexo das nuvens) e uma
-            // esfera de vidro (a refração das nuvens) (spec 041).
-            cloudGround(app);
+            // As sombras das nuvens correndo pelo terreno com vento forte, a água de um lago escavado nele (o reflexo das
+            // nuvens) e uma esfera de vidro (a refração das nuvens) (spec 041).
+            cloudTerrain(app, { center: [40, 30], half: 30, rim: 0.25 });
             rippledWater(app, [60, 2, 60], [40, -0.9, 30]);
-            glassSphere(app, [24, 3, 14], 3, 1.5, 60);
-            const { move } = cloudSky(app, 50, { coverage: 0.45, type: 0.5, wind: [25, 5] }, [0, 14, 0], [40, 0, 30]);
+            glassSphere(app, [30, 3, 22], 3, 1.5, 60);
+            // O sol a 70° e a cobertura de 0,35: a borda de uma sombra passa pelo lago durante a tomada (vista de cima, a 50°
+            // e 0,45 o lago ficava no meio de uma sombra de ~1 km o tempo todo).
+            const { move } = cloudSky(
+                app,
+                70,
+                { coverage: 0.35, type: 0.5, wind: [25, 5] },
+                [0, 14, 0],
+                [40, 0, 30],
+            );
             return (i) => {
                 const a = (i / 479) * 0.6;
                 move([0, 14, 0], [40 * Math.cos(a) - 10 * Math.sin(a), 0, 30 + 10 * Math.sin(a)]);
