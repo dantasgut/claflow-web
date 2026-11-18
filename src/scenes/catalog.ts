@@ -5,7 +5,7 @@
 // agitada vista de cima, fundo de areia), natureza (vale com relevo, céu, luz global e o lago), cornell (caixa de Cornell
 // com a luz global), dia (cômodo com janela, o sol andando), nevoa (o mesmo cômodo com névoa), pano (tecido XPBD), sprites
 // (partículas e os vértices de uma esfera como sprites), ondulacao (lâmina de água com ondulações e a esfera de vidro
-// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, voo, sombrasnuvens). O tamanho vem da URL (`?w=`, `?h=`; padrão 1280 × 720).
+// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, solpostolento, voo, sombrasnuvens). O tamanho vem da URL (`?w=`, `?h=`; padrão 1280 × 720).
 import * as clayflow from 'clayflow/web';
 import {
     Application,
@@ -208,7 +208,7 @@ function rippledWater(app: Application, size: Vec3, center: Vec3): void {
  * Exposição (EV, multiplicador 2^EV) de um fotômetro de luz incidente (C = 250, padrão de ponto médio de 18 %) pela
  * elevação do sol: o EV100 da iluminância horizontal no chão (o sol pela transmitância e o céu pela integral da radiância,
  * na atmosfera de referência f64 do motor, `scene/reference/atmosphere.ts`; 100 000 lx no topo), `0,526 − EV100`. Ao meio
- * dia, −14,47 (a regra do "sunny 16", EV100 15). Abaixo de 8°, a câmera acompanha só 15 % da queda: com o sol baixo na
+ * dia, −14,47 (a regra do "sunny 16", EV100 15). Com o sol baixo, a câmera acompanha só 15 % da queda: com o sol baixo na
  * frente, o fotógrafo expõe para o céu (o fotômetro de luz incidente levaria o pôr do sol ao brilho do dia e lavaria a
  * cor; o olho também não se adapta por inteiro).
  */
@@ -231,15 +231,86 @@ const METER: readonly (readonly [number, number])[] = [
     [90, -14.7],
 ];
 
-function meterExposure(elevation: number): number {
-    const e = Math.min(90, Math.max(-4, elevation));
+/**
+ * Derivadas de Fritsch–Carlson nos nós da tabela (a curva por Hermite cúbica é monótona e de derivada contínua: a
+ * interpolação linear tinha um bico em cada nó).
+ */
+const METER_SLOPES: readonly number[] = (() => {
+    const n = METER.length;
+    const h = METER.slice(1).map(([e], k) => e - METER[k]![0]);
+    const d = METER.slice(1).map(([, x], k) => (x - METER[k]![1]) / h[k]!);
+    const m = METER.map((_, k) => {
+        if (k === 0) return d[0]!;
+        if (k === n - 1) return d[n - 2]!;
+        const a = d[k - 1]!;
+        const b = d[k]!;
+        if (a * b <= 0) return 0;
+        const w1 = 2 * h[k]! + h[k - 1]!;
+        const w2 = h[k]! + 2 * h[k - 1]!;
+        return (w1 + w2) / (w1 / a + w2 / b);
+    });
+    return m;
+})();
+
+/** O fotômetro (EV) e a derivada dele (EV/°) na elevação `e` (−4° a 90°). */
+function meterAt(e: number): readonly [number, number] {
     let k = 0;
     while (k < METER.length - 2 && METER[k + 1]![0] < e) k++;
     const [e0, x0] = METER[k]!;
     const [e1, x1] = METER[k + 1]!;
-    const meter = x0 + ((x1 - x0) * (e - e0)) / (e1 - e0);
-    const at8 = -11.33;
-    return e >= 8 ? meter : at8 + 0.15 * (meter - at8);
+    const h = e1 - e0;
+    const t = (e - e0) / h;
+    const m0 = METER_SLOPES[k]! * h;
+    const m1 = METER_SLOPES[k + 1]! * h;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const value =
+        (2 * t3 - 3 * t2 + 1) * x0 + (t3 - 2 * t2 + t) * m0 + (-2 * t3 + 3 * t2) * x1 + (t3 - t2) * m1;
+    const slope =
+        ((6 * t2 - 6 * t) * x0 + (3 * t2 - 4 * t + 1) * m0 + (-6 * t2 + 6 * t) * x1 + (3 * t2 - 2 * t) * m1) / h;
+    return [value, slope];
+}
+
+/** A fração da mudança do fotômetro que a câmera acompanha: toda acima de 11°, 15 % abaixo de 5°, suave entre eles. */
+function meterFollow(e: number): number {
+    const u = Math.min(1, Math.max(0, (e - 5) / 6));
+    return 0.15 + 0.85 * u * u * (3 - 2 * u);
+}
+
+/** Passo (°) da tabela da exposição integrada. */
+const EXPOSURE_STEP = 0.01;
+
+/**
+ * A exposição por elevação, integrada de 90° para baixo: `X(e) = fotômetro(90°) − ∫ₑ⁹⁰ fração·fotômetro′` — a câmera
+ * acompanha o fotômetro inteiro com o sol alto e uma fração dele com o sol baixo, sem degrau nem bico (a regra antiga
+ * trocava a derivada de uma vez a 8°: o brilho do chão e do céu, que ficava parado, passava a cair na hora).
+ */
+const EXPOSURE_TABLE: readonly number[] = (() => {
+    const n = Math.round((90 + 4) / EXPOSURE_STEP);
+    const out = new Array<number>(n + 1);
+    out[n] = meterAt(90)[0];
+    const g = (e: number): number => meterFollow(e) * meterAt(e)[1];
+    for (let k = n - 1; k >= 0; k--) {
+        const e = -4 + k * EXPOSURE_STEP;
+        // Simpson no passo.
+        out[k] = out[k + 1]! - (EXPOSURE_STEP / 6) * (g(e) + 4 * g(e + EXPOSURE_STEP / 2) + g(e + EXPOSURE_STEP));
+    }
+    return out;
+})();
+
+/** A exposição (EV) com o sol a `elevation` graus: Hermite na tabela integrada (valor e derivada contínuos). */
+function meterExposure(elevation: number): number {
+    const e = Math.min(90, Math.max(-4, elevation));
+    const k = Math.min(EXPOSURE_TABLE.length - 2, Math.floor((e + 4) / EXPOSURE_STEP));
+    const e0 = -4 + k * EXPOSURE_STEP;
+    const t = (e - e0) / EXPOSURE_STEP;
+    const x0 = EXPOSURE_TABLE[k]!;
+    const x1 = EXPOSURE_TABLE[k + 1]!;
+    const m0 = meterFollow(e0) * meterAt(e0)[1] * EXPOSURE_STEP;
+    const m1 = meterFollow(e0 + EXPOSURE_STEP) * meterAt(e0 + EXPOSURE_STEP)[1] * EXPOSURE_STEP;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * x0 + (t3 - 2 * t2 + t) * m0 + (-2 * t3 + 3 * t2) * x1 + (t3 - t2) * m1;
 }
 
 /**
@@ -340,6 +411,22 @@ export const SHOTS: Record<string, Shot> = {
                 // Mais tempo perto do horizonte (onde a cor muda): a elevação desce pela raiz do tempo invertida.
                 setSun(-4 + 64 * (1 - t) ** 1.6);
             };
+        },
+    },
+    solpostolento: {
+        frames: 3600,
+        warmup: 600,
+        build(app) {
+            // O `solposto` mais devagar (spec 041): o sol desce de 20° a −4° em 60 s, linear (0,4°/s, ~100 × o real).
+            cloudGround(app);
+            const { setSun } = cloudSky(
+                app,
+                20,
+                { coverage: 0.4, type: 0.5, wind: [6, 2] },
+                [0, 2, 0],
+                [800, 260, 600],
+            );
+            return (i) => setSun(20 - 24 * (i / 3599));
         },
     },
     voo: {
