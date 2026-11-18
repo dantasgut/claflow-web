@@ -5,7 +5,7 @@
 // agitada vista de cima, fundo de areia), natureza (vale com relevo, céu, luz global e o lago), cornell (caixa de Cornell
 // com a luz global), dia (cômodo com janela, o sol andando), nevoa (o mesmo cômodo com névoa), pano (tecido XPBD), sprites
 // (partículas e os vértices de uma esfera como sprites), ondulacao (lâmina de água com ondulações e a esfera de vidro
-// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, solpostolento, voo, sombrasnuvens,
+// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, solpostolento, solpostooposto, voo, sombrasnuvens,
 // tempestade). O tamanho vem da URL (`?w=`, `?h=`; padrão 1280 × 720).
 import * as clayflow from 'clayflow/web';
 import {
@@ -206,12 +206,11 @@ function rippledWater(app: Application, size: Vec3, center: Vec3): void {
 }
 
 /**
- * Exposição (EV, multiplicador 2^EV) de um fotômetro de luz incidente (C = 250, padrão de ponto médio de 18 %) pela
- * elevação do sol: o EV100 da iluminância horizontal no chão (o sol pela transmitância e o céu pela integral da radiância,
- * na atmosfera de referência f64 do motor, `scene/reference/atmosphere.ts`; 100 000 lx no topo), `0,526 − EV100`. Ao meio
- * dia, −14,47 (a regra do "sunny 16", EV100 15). Com o sol baixo, a câmera acompanha só 15 % da queda: com o sol baixo na
- * frente, o fotógrafo expõe para o céu (o fotômetro de luz incidente levaria o pôr do sol ao brilho do dia e lavaria a
- * cor; o olho também não se adapta por inteiro).
+ * O fotômetro de luz incidente (C = 250, padrão de ponto médio de 18 %) pela elevação do sol: a exposição (EV,
+ * multiplicador 2^EV) que levaria a iluminância horizontal no chão (o sol pela transmitância e o céu pela integral da
+ * radiância, na atmosfera de referência f64 do motor, `scene/reference/atmosphere.ts`; 100 000 lx no topo) ao ponto médio,
+ * `0,526 − EV100`. Ao meio dia, −14,47 (a regra do "sunny 16", EV100 15). A câmera segue só uma fração dele
+ * (`METER_FOLLOW`).
  */
 const METER: readonly (readonly [number, number])[] = [
     [-4, -3.69],
@@ -272,46 +271,20 @@ function meterAt(e: number): readonly [number, number] {
     return [value, slope];
 }
 
-/** A fração da mudança do fotômetro que a câmera acompanha: toda acima de 11°, 15 % abaixo de 5°, suave entre eles. */
-function meterFollow(e: number): number {
-    const u = Math.min(1, Math.max(0, (e - 5) / 6));
-    return 0.15 + 0.85 * u * u * (3 - 2 * u);
-}
-
-/** Passo (°) da tabela da exposição integrada. */
-const EXPOSURE_STEP = 0.01;
-
 /**
- * A exposição por elevação, integrada de 90° para baixo: `X(e) = fotômetro(90°) − ∫ₑ⁹⁰ fração·fotômetro′` — a câmera
- * acompanha o fotômetro inteiro com o sol alto e uma fração dele com o sol baixo, sem degrau nem bico (a regra antiga
- * trocava a derivada de uma vez a 8°: o brilho do chão e do céu, que ficava parado, passava a cair na hora).
+ * A fração da mudança do fotômetro que a câmera acompanha (spec 041): a metade, em todas as elevações — a regra do
+ * "sunny 16" seguida em parte, como no lapso de tempo do dia para a noite (a exposição corrigida aos poucos, sem anular a
+ * queda da luz). Do meio dia ao sol a 20°, a imagem escurece 0,9 EV; a 5°, 2,1 EV; no horizonte, 3,4 EV; a −4°, 5,5 EV —
+ * o crepúsculo escurece como no olho e na câmera; o fotômetro inteiro levava o chão ao mesmo brilho até 11° e escondia a
+ * queda.
  */
-const EXPOSURE_TABLE: readonly number[] = (() => {
-    const n = Math.round((90 + 4) / EXPOSURE_STEP);
-    const out = new Array<number>(n + 1);
-    out[n] = meterAt(90)[0];
-    const g = (e: number): number => meterFollow(e) * meterAt(e)[1];
-    for (let k = n - 1; k >= 0; k--) {
-        const e = -4 + k * EXPOSURE_STEP;
-        // Simpson no passo.
-        out[k] = out[k + 1]! - (EXPOSURE_STEP / 6) * (g(e) + 4 * g(e + EXPOSURE_STEP / 2) + g(e + EXPOSURE_STEP));
-    }
-    return out;
-})();
+const METER_FOLLOW = 0.5;
 
-/** A exposição (EV) com o sol a `elevation` graus: Hermite na tabela integrada (valor e derivada contínuos). */
+/** A exposição (EV, multiplicador 2^EV) com o sol a `elevation` graus: a do meio dia mais a fração da mudança do fotômetro. */
 function meterExposure(elevation: number): number {
     const e = Math.min(90, Math.max(-4, elevation));
-    const k = Math.min(EXPOSURE_TABLE.length - 2, Math.floor((e + 4) / EXPOSURE_STEP));
-    const e0 = -4 + k * EXPOSURE_STEP;
-    const t = (e - e0) / EXPOSURE_STEP;
-    const x0 = EXPOSURE_TABLE[k]!;
-    const x1 = EXPOSURE_TABLE[k + 1]!;
-    const m0 = meterFollow(e0) * meterAt(e0)[1] * EXPOSURE_STEP;
-    const m1 = meterFollow(e0 + EXPOSURE_STEP) * meterAt(e0 + EXPOSURE_STEP)[1] * EXPOSURE_STEP;
-    const t2 = t * t;
-    const t3 = t2 * t;
-    return (2 * t3 - 3 * t2 + 1) * x0 + (t3 - 2 * t2 + t) * m0 + (-2 * t3 + 3 * t2) * x1 + (t3 - t2) * m1;
+    const noon = meterAt(90)[0];
+    return noon + METER_FOLLOW * (meterAt(e)[0] - noon);
 }
 
 /**
@@ -320,13 +293,25 @@ function meterExposure(elevation: number): number {
  */
 const CUMULUS_DENSITY = 0.08;
 
-/** O céu físico e a camada de nuvens (spec 041) com o sol a `elevation` graus e a câmera em `eye` olhando `target`. */
+/**
+ * A turbidez das cenas do pôr do sol (spec 041): 8 × os aerossóis de Hillaire — profundidade ótica vertical ~0,04 a 550 nm
+ * e visibilidade de ~80 km, o ar limpo de um fim de tarde no campo (a média continental fica em 0,1–0,2). Os aerossóis
+ * espalham para a frente: a auréola do sol, o laranja do horizonte e os feixes de luz e sombra entre as nuvens.
+ */
+const SUNSET_TURBIDITY = 8;
+
+/**
+ * O céu físico e a camada de nuvens (spec 041) com o sol a `elevation` graus e a câmera em `eye` olhando `target`. A
+ * turbidez multiplica os aerossóis do `Sky` (1: os de Hillaire, profundidade ótica vertical 0,005 a 550 nm — ar de
+ * montanha, visibilidade de ~200 km).
+ */
 function cloudSky(
     app: Application,
     elevation: number,
     values: clayflow.CloudLayerValues,
     eye: Vec3,
     target: Vec3,
+    turbidity = 1,
 ): { sun: clayflow.DirectionalLight; move: (p: Vec3, t: Vec3) => void; setSun: (elevation: number) => void } {
     const direction = (el: number): [number, number, number, number] => {
         const e = (el * Math.PI) / 180;
@@ -338,13 +323,20 @@ function cloudSky(
         castShadow: true,
     });
     app.world.insert(sun);
-    app.world.insert(new clayflow.Sky({ sun }));
+    app.world.insert(new clayflow.Sky({ sun, turbidity }));
     app.world.insert(new clayflow.CloudLayer({ density: CUMULUS_DENSITY, ...values }));
     const view = new Transform({ position: [...eye, 1], rotation: Transform.lookRotation(eye, target) });
     app.world.insert(
         new clayflow.Camera({ fov: Math.PI / 3, aspect: W / H, aspectMode: 'fixed', near: 0.5, far: 200_000 }).add(view),
     );
     app.defaults.renderer.output.data.exposure = meterExposure(elevation);
+    // A curva de tom que guarda a matiz e a saturação até perto do branco (Khronos PBR Neutral, spec 041): o AgX leva os
+    // realces saturados ao branco — o horizonte do lado do sol a 1° (2100 K na referência f64 da atmosfera, x 0,50 y 0,40)
+    // saía a ~4200 K na tela, e as nuvens douradas do sol baixo, quase brancas.
+    app.defaults.renderer.output.data.operator = 'neutral';
+    // O espalhamento da lente (spec 041): 4 % da luz em θ⁻³, sem limiar — o clarão em volta do sol com a energia inteira
+    // do disco.
+    app.defaults.post.addEffect(new clayflow.Bloom());
     return {
         sun,
         move: (p, t) => {
@@ -383,9 +375,11 @@ interface TerrainLake {
 }
 
 /**
- * O terreno das cenas das nuvens (spec 041): colinas suaves até o horizonte pela função de superfície (ruído de valor em
- * cinco oitavas, de 1,6 km a ~100 m, e lombas de 15–60 m), planas na origem (a câmera a 2 m do chão) e mais altas com a
- * distância — ±2 m no pasto perto, até ~60 m a 4–6 km, menos de 1° acima do horizonte: o relevo não tapa o céu. Malha adaptativa na GPU
+ * O terreno das cenas das nuvens (spec 041): colinas até o horizonte pela função de superfície (ruído de valor em cinco
+ * oitavas, de 1,6 km a ~100 m; colinas de 400–900 m com ±22 m e encostas de 15–25 %, ondulações de 120–250 m e lombas de
+ * 15–60 m), planas na origem (a câmera a 2 m do chão) e mais altas com a distância — ±2 m no pasto perto, até ~60 m a
+ * 4–6 km, menos de 1° acima do horizonte: o relevo não tapa o céu. Com o sol baixo, as encostas viradas para ele acendem
+ * e as do outro lado ficam na sombra (a das colinas, pelo mapa de sombra). Malha adaptativa na GPU
  * (o domínio esticado: segmentos de ~0,5 m perto da origem e ~20 m na borda). Coberto de gramado pelo material por pixel
  * (o mesmo caminho da `natureza`): manchas de grama verde e seca de ~25 m e de ~250 m, touceiras de ~40 cm e o grão de
  * ~4 cm, cada oitava apagada quando cai abaixo de 3 pixels (a pegada `s.footprint`), e terra onde a encosta é íngreme. A
@@ -437,6 +431,24 @@ fn surface_fn(u: f32, v: f32, time: f32, data: SurfaceFnParams) -> vec3f {
         amp *= 0.48;
         f *= 2.17;
     }
+    // Colinas de 400–900 m (±30 m: encostas de 15–25 %, que o sol baixo ilumina de um lado e deixa na sombra do
+    // outro) e ondulações de 120–250 m (±4 m), três oitavas cada.
+    var hill = 0.0;
+    var ha = 1.0;
+    var hf = 1.0 / 700.0;
+    for (var k = 0u; k < 3u; k++) {
+        hill += ha * tr_noise(p * hf + vec2f(f32(k) * 3.3 - 70.0, f32(k) * 9.1 + 25.0));
+        ha *= 0.5;
+        hf *= 2.3;
+    }
+    var swell = 0.0;
+    var sa = 1.0;
+    var sf = 1.0 / 180.0;
+    for (var k = 0u; k < 3u; k++) {
+        swell += sa * tr_noise(p * sf + vec2f(f32(k) * 5.7 + 13.0, f32(k) * 2.9 - 31.0));
+        sa *= 0.5;
+        sf *= 2.2;
+    }
     // Lombas de 15–60 m de comprimento (±1,5 m), o que dá o chão irregular perto da câmera.
     var bump = 0.0;
     var ba = 1.5;
@@ -446,13 +458,19 @@ fn surface_fn(u: f32, v: f32, time: f32, data: SurfaceFnParams) -> vec3f {
         ba *= 0.55;
         bf *= 2.1;
     }
-    // Pasto ondulado perto (±2 m), colinas longe (até ~60 m, acima do plano: a borda da malha fica acima do horizonte);
-    // plano em volta da origem (a câmera a 2 m do chão).
+    // Pasto ondulado perto (±2 m), as colinas a partir de ~100 m e as maiores longe (até ~60 m acima do plano a 4–6 km:
+    // menos de 1° acima do horizonte, o relevo não tapa o céu); plano em volta da origem (a câmera a 2 m do chão).
     let far = smoothstep(1500.0, 4500.0, r);
     let edge = smoothstep(${HALF - 1500}.0, ${HALF}.0, max(abs(p.x), abs(p.y)));
     let near = smoothstep(6.0, 40.0, r);
     let height = mix(4.0, 110.0, smoothstep(250.0, 4500.0, r)) * smoothstep(10.0, 90.0, r);
-    var h = height * (n + 0.4 * far) + near * bump + 25.0 * edge;
+    // Um vale largo no rumo do poente e do nascente (o azimute do sol das cenas, (0,8; 0,6), e o oposto): as colinas a um
+    // quarto ali, o horizonte do sol baixo e o do lado oposto (a sombra da Terra) ficam abertos.
+    let toward = abs(dot(p, vec2f(0.8, 0.6))) / max(r, 1.0);
+    let across = abs(p.x * 0.6 - p.y * 0.8) / max(r, 1.0);
+    let opening = mix(1.0, mix(0.25, 1.0, smoothstep(0.08, 0.35, across)), smoothstep(0.0, 0.5, toward));
+    let rolling = smoothstep(60.0, 400.0, r) * (1.0 - 0.5 * far) * opening;
+    var h = height * (n + 0.4 * far) + rolling * (22.0 * hill + 4.0 * swell) + near * bump + 25.0 * edge;
 ${lakeCode}    return vec3f(p.x, h, p.y);
 }`,
                 }),
@@ -532,7 +550,14 @@ export const SHOTS: Record<string, Shot> = {
             // O sol descendo de 12° a 1° atrás das nuvens (spec 041), a câmera olhando para ele (o azimute do sol é
             // (0,8; 0,6): de costas para o sol, o céu baixo não fica laranja); a exposição pelo fotômetro.
             cloudTerrain(app);
-            const { setSun } = cloudSky(app, 12, { coverage: 0.45, type: 0.55, wind: [8, 0] }, [0, 2, 0], [800, 130, 600]);
+            const { setSun } = cloudSky(
+                app,
+                12,
+                { coverage: 0.45, type: 0.55, wind: [8, 0] },
+                [0, 2, 0],
+                [800, 130, 600],
+                SUNSET_TURBIDITY,
+            );
             return (i) => setSun(12 - 11 * (i / 479));
         },
     },
@@ -550,6 +575,7 @@ export const SHOTS: Record<string, Shot> = {
                 { coverage: 0.4, type: 0.5, wind: [6, 2] },
                 [0, 2, 0],
                 [800, 260, 600],
+                SUNSET_TURBIDITY,
             );
             return (i) => {
                 const t = i / 1199;
@@ -570,8 +596,29 @@ export const SHOTS: Record<string, Shot> = {
                 { coverage: 0.4, type: 0.5, wind: [6, 2] },
                 [0, 2, 0],
                 [800, 260, 600],
+                SUNSET_TURBIDITY,
             );
             return (i) => setSun(20 - 24 * (i / 3599));
+        },
+    },
+    solpostooposto: {
+        frames: 2400,
+        warmup: 600,
+        build(app) {
+            // O lado oposto ao pôr do sol (spec 041): a câmera de costas para o sol, olhando 6° acima do horizonte no azimute
+            // (−0,8; −0,6) enquanto o sol desce de 8° a −5° em 40 s — a sombra da Terra subindo do horizonte com o cinturão
+            // de Vênus (o rosa acima dela) e os raios anticrepusculares (as sombras das nuvens do lado do sol, convergindo
+            // para o ponto oposto a ele).
+            cloudTerrain(app);
+            const { setSun } = cloudSky(
+                app,
+                8,
+                { coverage: 0.4, type: 0.5, wind: [6, 2] },
+                [0, 2, 0],
+                [-800, 110, -600],
+                SUNSET_TURBIDITY,
+            );
+            return (i) => setSun(8 - 13 * (i / 2399));
         },
     },
     voo: {
