@@ -317,12 +317,10 @@ function cloudSky(
         const e = (el * Math.PI) / 180;
         return [-Math.cos(e) * 0.8, -Math.sin(e), -Math.cos(e) * 0.6, 0];
     };
-    // O raio angular do disco do sol (0,2679°): a penumbra das sombras, a do relevo e a do mapa virtual, pelo tamanho dele.
     const sun = new clayflow.DirectionalLight({
         direction: direction(elevation),
         intensity: 100_000,
         castShadow: true,
-        angularRadius: 0.004675,
     });
     app.world.insert(sun);
     app.world.insert(new clayflow.Sky({ sun, turbidity }));
@@ -491,18 +489,6 @@ ${lakeCode}    return vec3f(p.x, h, p.y);
 }`,
                 }),
             )
-            // A sombra do relevo pelo campo de alturas (spec 041): o campo e a pirâmide de máximos construídos uma vez (a
-            // superfície não muda), a visibilidade do disco do sol por marcha neles — o sol andando não redesenha nada (no
-            // mapa de sombra virtual, os 4,5 M triângulos do terreno a cada quadro). Nós de 2,9 m nos 12 km; a amostragem da
-            // função em 2048² no domínio (0,35 m perto da câmera, 17 m na borda).
-            .add(
-                new clayflow.SurfaceCollider({
-                    resolution: 4096,
-                    sampling: [2048, 2048],
-                    steps: 1,
-                    castsShadow: true,
-                }),
-            )
             .add(new clayflow.StandardMaterial({ albedo: [0.2, 0.3, 0.1, 1], roughness: 0.95 }))
             .add(
                 new clayflow.MaterialFunction({
@@ -610,25 +596,6 @@ export const SHOTS: Record<string, Shot> = {
                 // Mais tempo perto do horizonte (onde a cor muda): a elevação desce pela raiz do tempo invertida.
                 setSun(-4 + 64 * (1 - t) ** 1.6);
             };
-        },
-    },
-    colinas: {
-        frames: 600,
-        warmup: 600,
-        build(app) {
-            // A sombra do relevo com o sol baixo (spec 041): o sol descendo de 6° a 1° no azimute (0,8; 0,6), a câmera a
-            // 120 m olhando de lado para ele (a sombra das colinas se estende pelo terreno, de lado na imagem), poucas
-            // nuvens (a sombra delas não cobre o chão todo).
-            cloudTerrain(app);
-            const { setSun } = cloudSky(
-                app,
-                6,
-                { coverage: 0.15, type: 0.5, wind: [6, 2] },
-                [0, 120, 0],
-                [-600, 40, 800],
-                SUNSET_TURBIDITY,
-            );
-            return (i) => setSun(6 - 5 * (i / 599));
         },
     },
     solpostolento: {
