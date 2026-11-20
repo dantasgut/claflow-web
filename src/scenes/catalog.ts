@@ -682,7 +682,7 @@ export const SHOTS: Record<string, Shot> = {
             const elevation = 20;
             const [base, top] = [750, 1150];
             const wind: [number, number] = [2.5, -1.5];
-            const eye: Vec3 = [-938, 51.5, 4024];
+            const eye: Vec3 = [-850, 51.4, 4090];
             const a0 = Math.atan2(0.6, 0.8);
             // O chão em volta das manchas (m) e o meio da tomada em tempo simulado (s: 600 quadros de aquecimento e metade
             // dos 840): o vão no mundo é o do referencial do vento mais o vento × tempo.
@@ -690,7 +690,7 @@ export const SHOTS: Record<string, Shot> = {
             const mid = (600 + 420) / 60;
             const shift = (0.5 * (base + top) - ground) / Math.tan((elevation * Math.PI) / 180);
             const spots: [number, number, number][] = [
-                [400, 0, 700],
+                [200, 0, 760],
             ];
             const holes = spots.map(([ahead, side, r], k) => {
                 const along = ahead + shift;
@@ -698,17 +698,56 @@ export const SHOTS: Record<string, Shot> = {
                 const z = eye[2] + along * 0.6 + side * 0.8 - wind[1] * mid;
                 return `vec4f(${x.toFixed(1)}, ${z.toFixed(1)}, ${r.toFixed(1)}, ${(k * 2.39 + 0.7).toFixed(2)})`;
             });
+            // O ruído de valor (hash inteiro) de quatro oitavas no ponto `q` (WGSL em linha, dentro da função): `n` em [0, 1].
+            const noise = (out: string, q: string): string => `var ${out} = 0.0;
+    {
+        var p = ${q};
+        var amp = 0.5;
+        for (var o = 0u; o < 4u; o++) {
+            let i = floor(p);
+            let f = fract(p);
+            let u = f * f * (3.0 - 2.0 * f);
+            var g = vec4f(0.0);
+            for (var c = 0u; c < 4u; c++) {
+                let e = vec2i(i32(c & 1u), i32(c >> 1u));
+                let k = vec2u(vec2i(i) + e + vec2i(65536));
+                var h = (k.x * 1597334677u) ^ (k.y * 3812015801u) ^ (o * 2654435761u);
+                h = (h ^ (h >> 16u)) * 2246822519u;
+                h = h ^ (h >> 13u);
+                g[c] = f32(h) / 4294967295.0;
+            }
+            ${out} += amp * mix(mix(g.x, g.y, u.x), mix(g.z, g.w, u.x), u.y);
+            p = p * 2.03 + vec2f(17.3, 9.1);
+            amp *= 0.5;
+        }
+        ${out} /= 0.9375;
+    }`;
             const code = /* wgsl */ `fn coverage_fn(xz: vec2f, time: f32, data: CoverageFnParams) -> vec3f {
     var holes = array<vec4f, ${holes.length}>(${holes.join(', ')});
+    // As frestas: o ruído esticado no rumo do sol (700 m ao longo, 140 m de través) — tiras de nuvem paralelas ao feixe,
+    // que cortam o vão e a borda em várias fendas lado a lado (os raios separados vistos de frente para o sol).
+    let along = dot(xz, vec2f(0.8, 0.6));
+    let across = dot(xz, vec2f(-0.6, 0.8));
+    ${noise('slit', 'vec2f(along / 700.0, across / 140.0)')}
+    // Os rolos e as bolsas da base: faixas de ~700 m de través ao vento com o ruído isótropo de 500 m.
+    ${noise('lump', 'xz / 500.0')}
+    let roll = 0.5 + 0.5 * sin(6.2831853 * dot(xz, vec2f(0.51, -0.86)) / 700.0 + 3.0 * lump);
+    let bulge = 0.55 * lump + 0.45 * roll;
     var c = 1.0;
     for (var k = 0u; k < ${holes.length}u; k++) {
         let h = holes[k];
         let d = xz - h.xy;
         let t = atan2(d.y, d.x);
-        let r = h.z * (1.0 + 0.12 * sin(3.0 * t + h.w) + 0.07 * sin(5.0 * t + 1.7 * h.w) + 0.04 * sin(11.0 * t + 2.3 * h.w));
-        c = min(c, smoothstep(r - 250.0, r + 250.0, length(d)));
+        let r = h.z * (1.0 + 0.14 * sin(3.0 * t + h.w) + 0.09 * sin(5.0 * t + 1.7 * h.w) + 0.06 * sin(9.0 * t + 2.3 * h.w)
+            + 0.04 * sin(17.0 * t + 3.1 * h.w));
+        let l = length(d);
+        let ring = smoothstep(r - 200.0, r + 200.0, l);
+        // A faixa da borda e o vão: a borda quebrada onde o ruído é baixo, pedaços de nuvem onde é alto.
+        let w = 1.0 - smoothstep(r + 150.0, r + 550.0, l);
+        let frag = max(ring * smoothstep(0.32, 0.46, slit), smoothstep(0.56, 0.66, slit));
+        c = min(c, mix(ring, frag, w));
     }
-    return vec3f(0.86 * c, 0.4, 1.0);
+    return vec3f((0.84 + 0.08 * bulge) * c, 0.25 + 0.4 * bulge, 0.6 + 0.4 * bulge);
 }`;
             const target = (el: number, az: number): Vec3 => {
                 const e = (el * Math.PI) / 180;
@@ -730,15 +769,15 @@ export const SHOTS: Record<string, Shot> = {
                     base,
                     top,
                     wind,
-                    shapeScale: 1400,
-                    detailScale: 250,
+                    shapeScale: 1200,
+                    detailScale: 200,
                 },
                 eye,
-                target(1, -5),
+                target(-3, -5),
                 SUNSET_TURBIDITY,
                 { extinction: 1.0, scaleHeight: 0.3 },
             );
-            return (i) => move(eye, target(1, -6 + (4 * i) / 839));
+            return (i) => move(eye, target(-3, -6 + (4 * i) / 839));
         },
     },
     solpostolento: {
