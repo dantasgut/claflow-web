@@ -666,39 +666,84 @@ export const SHOTS: Record<string, Shot> = {
         frames: 960,
         warmup: 600,
         build(app) {
-            // Os raios chegando ao chão perto da câmera (spec 041, R21; pedido do usuário): o sol de fim de tarde a 35° tapado
-            // por uma camada baixa e densa de estratocúmulos (700–950 m, extinção 0,3/m, cobertura 0,87, células de ~1,5 km com
-            // vãos de
-            // 100–300 m) andando com o vento; o ar úmido de ~13 km de visibilidade (névoa seca de 0,3/km até 1,2 km); a câmera
-            // a 3 m, 25° ao lado do azimute do sol e levantada 10°: a base da nuvem com os vãos em cima, os feixes descendo
-            // pelo meio do quadro e as manchas de sol na grama embaixo, a poucas centenas de metros. Com o sol a 35°, o raio
-            // atravessa a camada deslocando-se (espessura/2)/tan(elevação) ≈ 180 m para cada lado do eixo do vão: a camada
-            // fina deixa passar o sol pelos vãos de centenas de metros (uma de 1 km não deixaria — referência f64).
+            // Os raios chegando ao chão perto da câmera (spec 041, R21; pedido do usuário): o sol de fim de tarde a 30° tapado
+            // por uma camada fina e fechada de estratos (800–1000 m, extinção 0,3/m) com vãos de 720–800 m de diâmetro
+            // andando com o vento; o ar úmido de ~13 km de visibilidade (névoa seca de 0,3/km até 1,2 km); a câmera a 5 m, 30°
+            // ao lado do azimute do sol e levantada 12°: a base da nuvem com os vãos em cima, os feixes descendo inclinados
+            // pelo meio do quadro e as manchas de sol na grama, na sombra da camada. O raio do sol atravessa a camada
+            // deslocando-se 346 m (espessura/tan 30°): a lente acesa de um vão de raio r tem 2r − 346 m — com r = 360–400 m,
+            // 370–450 m (com r = 300 m e 250 m de camada sobravam 167 m e o feixe sumia). Os vãos vêm da função de cobertura
+            // (no referencial do vento), cada um posto pela mancha que ele acende no chão (a direção a partir do azimute do sol
+            // e a distância): o centro fica 1559 m adiante na direção do sol (a meia altura / tan 30°), a borda ondulada por
+            // dois harmônicos. Duas regras da geometria: o centro de cada vão fica à distância da mancha do meio da linha do
+            // sol na camada (346 m de comprimento), então a mancha mais perto fica a 750 m — com menos, a borda macia do vão (o
+            // texel de 250 m do mapa de cobertura) chegaria à linha do sol e o disco apareceria; e os vãos ficam a ≥ 1 km um
+            // do outro, senão se fundem numa abertura só junto do sol.
+            const elevation = 30;
+            const [base, top] = [800, 1000];
+            const wind: [number, number] = [-3, 4];
+            const a0 = Math.atan2(0.6, 0.8);
+            // A câmera a 5 m sobre o alto de um morro (o chão a 74 m) na borda do vale largo do rumo do sol: as manchas a
+            // 0,7–1,5 km ficam 4–7° abaixo do horizonte (do chão plano, a 5 m, as lombas as escondiam); o chão do vale a ~30 m.
+            const eye: Vec3 = [-1150, 79, -3000];
+            const shift = (0.5 * (base + top) - 30) / Math.tan((elevation * Math.PI) / 180);
+            // A meio da tomada (~18 s de tempo simulado: 600 quadros de aquecimento e metade dos 960): o vão no mundo é o do
+            // referencial do vento mais o vento × tempo.
+            const mid = 18;
+            // [adiante (m, no rumo do sol), ao lado (m, para o lado da vista), raio do vão (m)]: as manchas a partir da câmera,
+            // a ≥ 900 m uma da outra (os vãos ficam à mesma distância entre si). A luz espalhada pela névoa cai depressa com o
+            // ângulo ao sol (a fase de Mie a 10° é ~4–5 × a de 30°): os feixes fortes são os das manchas perto do rumo dele.
+            const spots: [number, number, number][] = [
+                [750, 250, 380],
+                [1100, -650, 380],
+                [1650, 300, 400],
+                [2300, -500, 380],
+                [2600, 650, 400],
+                [750, 1150, 360],
+                [3500, -200, 380],
+                [3400, 1500, 380],
+                [1700, 1300, 380],
+                [4400, 700, 400],
+                [2500, 2300, 360],
+            ];
+            const holes = spots.map(([ahead, side, r], k) => {
+                const along = ahead + shift;
+                const x = eye[0] + along * 0.8 - side * 0.6 - wind[0] * mid;
+                const z = eye[2] + along * 0.6 + side * 0.8 - wind[1] * mid;
+                return `vec4f(${x.toFixed(1)}, ${z.toFixed(1)}, ${r.toFixed(1)}, ${(k * 2.39).toFixed(2)})`;
+            });
+            const code = /* wgsl */ `fn coverage_fn(xz: vec2f, time: f32, data: CoverageFnParams) -> vec3f {
+    var holes = array<vec4f, ${holes.length}>(${holes.join(', ')});
+    var c = 1.0;
+    for (var k = 0u; k < ${holes.length}u; k++) {
+        let h = holes[k];
+        let d = xz - h.xy;
+        let t = atan2(d.y, d.x);
+        let r = h.z * (1.0 + 0.12 * sin(3.0 * t + h.w) + 0.07 * sin(5.0 * t + 1.7 * h.w));
+        c = min(c, smoothstep(r - 50.0, r + 50.0, length(d)));
+    }
+    return vec3f(c, 0.1, 1.0);
+}`;
             cloudTerrain(app);
             const target = (el: number, az: number): Vec3 => {
                 const e = (el * Math.PI) / 180;
-                const a = Math.atan2(0.6, 0.8) + (az * Math.PI) / 180;
-                return [1000 * Math.cos(e) * Math.cos(a), 3 + 1000 * Math.sin(e), 1000 * Math.cos(e) * Math.sin(a)];
+                const a = a0 + (az * Math.PI) / 180;
+                return [
+                    eye[0] + 1000 * Math.cos(e) * Math.cos(a),
+                    eye[1] + 1000 * Math.sin(e),
+                    eye[2] + 1000 * Math.cos(e) * Math.sin(a),
+                ];
             };
             const { move } = cloudSky(
                 app,
-                35,
-                {
-                    coverage: 0.87,
-                    type: 0.3,
-                    density: 0.3,
-                    base: 700,
-                    top: 950,
-                    wind: [6, 3],
-                    shapeScale: 1500,
-                    detailScale: 300,
-                },
-                [0, 3, 0],
-                target(10, 25),
-                2,
+                elevation,
+                { coverage: { code }, density: 0.3, base, top, wind, shapeScale: 1500, detailScale: 300 },
+                eye,
+                target(12, 20),
+                SUNSET_TURBIDITY,
                 { extinction: 0.3, scaleHeight: 1.2 },
             );
-            return (i) => move([0, 3, 0], target(10, 27 - (4 * i) / 959));
+            return (i) => move(eye, target(12, 21 - (2 * i) / 959));
         },
     },
     solpostolento: {
