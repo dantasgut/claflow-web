@@ -528,9 +528,9 @@ fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) ->
     let spot = gr_fbm(xz + vec2f(31.0, 5.0), 0.04, s.footprint);
     let clump = gr_fbm(xz + vec2f(3.0, 47.0), 2.5, s.footprint);
     let grain = gr_fbm(xz + vec2f(71.0, 13.0), 25.0, s.footprint);
-    let lush = vec3f(0.035, 0.11, 0.015);
-    let green = vec3f(0.08, 0.2, 0.025);
-    let dry = vec3f(0.3, 0.25, 0.07);
+    let lush = vec3f(0.06, 0.1, 0.035);
+    let green = vec3f(0.1, 0.14, 0.05);
+    let dry = vec3f(0.24, 0.22, 0.11);
     var grass = mix(lush, green, smoothstep(-0.4, 0.4, field));
     grass = mix(grass, dry, smoothstep(0.15, 0.6, spot + 0.3 * field));
     grass *= 1.0 + 0.35 * clump + 0.45 * grain;
@@ -540,9 +540,9 @@ fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) ->
     // A folha de grama tem cutícula de cera (dielétrico, n ≈ 1,45) sobre o tecido difuso: olhando rente ao chão contra o
     // sol, o Fresnel da cera reflete a luz dourada do sol baixo; o dossel de folhas finas dá o brilho de fibra (sheen).
     // A terra exposta, quase sem cera.
-    let base = closure_add(closure_diffuse(c, 0.0), closure_scale(closure_sheen(clamp(c * 3.0, vec3f(0.0), vec3f(1.0)), 0.6), 1.0));
+    let base = closure_add(closure_diffuse(c, 0.0), closure_scale(closure_sheen(clamp(c * 3.0, vec3f(0.0), vec3f(1.0)), 0.6), 0.4));
     let wax = closure_dielectric(1.45, vec3f(1.0), 0.8, 0.0, vec3f(1.0, 0.0, 0.0));
-    return closure_layer(wax, base, vec3f(1.0), mix(0.6, 0.15, soil_t));
+    return closure_layer(wax, base, vec3f(1.0), mix(0.3, 0.1, soil_t));
 }`,
                 }),
             )
@@ -612,15 +612,15 @@ export const SHOTS: Record<string, Shot> = {
         frames: 1200,
         warmup: 600,
         build(app) {
-            // O `solposto` com a câmera apontada para o chão (spec 041): a mesma cena, só que 3° abaixo do horizonte (o sol e
-            // os raios no alto do quadro), para ver a luz dourada no gramado perto da câmera.
+            // O `solposto` com a câmera apontada para o chão (spec 041): a mesma cena, a 40 m de altura e 2° abaixo do horizonte (o
+            // sol e os raios no alto do quadro), para ver a luz dourada no gramado perto da câmera.
             cloudTerrain(app);
             const { setSun } = cloudSky(
                 app,
                 60,
                 { coverage: 0.4, type: 0.5, wind: [6, 2] },
-                [0, 2, 0],
-                [800, 2 - 1000 * Math.tan((3 * Math.PI) / 180), 600],
+                [0, 40, 0],
+                [800, 40 - 1000 * Math.tan((2 * Math.PI) / 180), 600],
                 SUNSET_TURBIDITY,
                 { extinction: 0.15, scaleHeight: 0.6 },
             );
@@ -1302,8 +1302,14 @@ fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) ->
     let rock = vec3f(0.42, 0.4, 0.38) * (1.0 + 0.25 * mid + 0.3 * fine);
     let edge = y + 0.06 * mid + 0.04 * big;
     var c = mix(sand, grass, smoothstep(-0.17, -0.12, edge));
+    let grass_t = smoothstep(-0.17, -0.12, edge) * (1.0 - smoothstep(0.28, 0.38, slope + 0.05 * mid));
     c = mix(c, rock, smoothstep(0.28, 0.38, slope + 0.05 * mid));
-    return closure_diffuse(clamp(c, vec3f(0.0), vec3f(1.0)), 0.0);
+    c = clamp(c, vec3f(0.0), vec3f(1.0));
+    // A mesma grama das cenas das nuvens: cutícula de cera (dielétrico n ≈ 1,45) sobre o difuso e o sheen do dossel; areia e
+    // rocha quase sem cera.
+    let base = closure_add(closure_diffuse(c, 0.0), closure_scale(closure_sheen(clamp(c * 3.0, vec3f(0.0), vec3f(1.0)), 0.6), 0.4 * grass_t));
+    let wax = closure_dielectric(1.45, vec3f(1.0), 0.8, 0.0, vec3f(1.0, 0.0, 0.0));
+    return closure_layer(wax, base, vec3f(1.0), mix(0.1, 0.3, grass_t));
 }`,
                         }),
                     )
