@@ -663,22 +663,24 @@ export const SHOTS: Record<string, Shot> = {
         },
     },
     'raios-chao': {
-        frames: 960,
+        frames: 840,
         warmup: 600,
         build(app) {
-            // Os raios chegando ao chão perto da câmera (spec 041, R21 rodada 19; pedido do usuário): o sol de fim de tarde a
-            // 20° atrás de um estratocúmulo fragmentado — uma camada fina (750–900 m) de cobertura 0,78 e tipo 0,25 —, os vãos
-            // vindos só dos parâmetros da camada (a cobertura, o tipo e as escalas da forma, 900 m, e do detalhe, 220 m: o
-            // ruído de Perlin-Worley com a erosão dá vãos de tamanhos e formas variados e borda irregular), andando com o
-            // vento; o ar úmido de ~13 km de visibilidade (névoa seca de 0,3/km até 1,2 km). A geometria: o raio do sol cruza a
-            // camada deslocando-se espessura/tan(elevação) = 412 m; só os vãos com raio acima de ~206 m deixam o sol passar
-            // direto (a lente acesa tem 2r − 412 m: os vãos pouco maiores que o limite dão os feixes estreitos); os menores só
-            // deixam passar a luz pelas bordas ralas (os feixes difusos). A câmera a 6 m sobre o chão (a 2,6 m), 15° ao lado do
-            // azimute do sol e levantada 8°, na sombra: a base das nuvens com os vãos em cima, os feixes descendo e as manchas
-            // de sol na grama a ~100–300 m na frente dela. O lugar saiu de uma vista do lado do sol (o chão que se vê pelos
-            // vãos é o chão aceso), sem furo desenhado.
+            // Os raios chegando ao chão perto da câmera (spec 041, R21 rodadas 19 e 22; pedido do usuário): o sol de fim de
+            // tarde a 20° atrás de um estratocúmulo fragmentado — uma camada fina (750–900 m) de cobertura 0,78 e tipo 0,25 —,
+            // os vãos vindos só dos parâmetros da camada (a cobertura, o tipo e as escalas da forma, 1800 m, e do detalhe,
+            // 300 m: o ruído de Perlin-Worley com a erosão dá vãos de tamanhos e formas variados e borda irregular), andando
+            // com o vento; o ar úmido (névoa seca de 0,6/km até 1,2 km) que mostra os feixes. A geometria: a luz de um vão na
+            // base (h ≈ 800 m) cai no chão h/tan(20°) ≈ 2,2 km mais perto de quem olha para o sol, e o raio cruza a camada
+            // deslocando-se espessura/tan(elevação) = 412 m — só os vãos com raio acima de ~206 m deixam o sol passar direto;
+            // a forma de 1800 m dá vãos (e manchas no chão) de 50–150 m. Vista rasante, a mancha a 100–400 m some no
+            // escorço; por isso a câmera fica no alto de uma colina (o chão a 59 m; o olho 3 m acima), quase horizontal
+            // (levantada 1°, o horizonte no meio do quadro), 8° à esquerda do sol: a encosta e o vale 100–400 m à frente
+            // ficam ~30 m abaixo, com as manchas de sol na grama, e o próprio topo na sombra (o sol atrás da borda da nuvem,
+            // os feixes descendo). O lugar saiu de uma vista de cima do mapa de sombras (os vãos que se veem são os do ruído),
+            // sem furo desenhado.
             const elevation = 20;
-            const eye: Vec3 = [-257, 6, 834];
+            const eye: Vec3 = [-1810, 62.1, 1420];
             const a0 = Math.atan2(0.6, 0.8);
             const target = (el: number, az: number): Vec3 => {
                 const e = (el * Math.PI) / 180;
@@ -700,15 +702,15 @@ export const SHOTS: Record<string, Shot> = {
                     base: 750,
                     top: 900,
                     wind: [2.5, -1.5],
-                    shapeScale: 900,
-                    detailScale: 220,
+                    shapeScale: 1800,
+                    detailScale: 300,
                 },
                 eye,
-                target(8, 15),
+                target(1, -8),
                 SUNSET_TURBIDITY,
-                { extinction: 0.3, scaleHeight: 1.2 },
+                { extinction: 0.6, scaleHeight: 1.2 },
             );
-            return (i) => move(eye, target(8, 16 - (2 * i) / 959));
+            return (i) => move(eye, target(1, -9 + (2 * i) / 839));
         },
     },
     solpostolento: {
