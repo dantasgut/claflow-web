@@ -5,7 +5,7 @@
 // agitada vista de cima, fundo de areia), natureza (vale com relevo, céu, luz global e o lago), cornell (caixa de Cornell
 // com a luz global), dia (cômodo com janela, o sol andando), nevoa (o mesmo cômodo com névoa), pano (tecido XPBD), sprites
 // (partículas e os vértices de uma esfera como sprites), ondulacao (lâmina de água com ondulações e a esfera de vidro
-// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, solpostolento, solpostooposto, voo, sombrasnuvens,
+// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, raios, solpostolento, solpostooposto, voo, sombrasnuvens,
 // tempestade). O tamanho vem da URL (`?w=`, `?h=`; padrão 1280 × 720).
 import * as clayflow from 'clayflow/web';
 import {
@@ -312,6 +312,7 @@ function cloudSky(
     eye: Vec3,
     target: Vec3,
     turbidity = 1,
+    haze?: { readonly extinction: number; readonly scaleHeight?: number },
 ): { sun: clayflow.DirectionalLight; move: (p: Vec3, t: Vec3) => void; setSun: (elevation: number) => void } {
     const direction = (el: number): [number, number, number, number] => {
         const e = (el * Math.PI) / 180;
@@ -323,7 +324,7 @@ function cloudSky(
         castShadow: true,
     });
     app.world.insert(sun);
-    app.world.insert(new clayflow.Sky({ sun, turbidity }));
+    app.world.insert(new clayflow.Sky({ sun, turbidity, ...(haze === undefined ? {} : { haze }) }));
     app.world.insert(new clayflow.CloudLayer({ density: CUMULUS_DENSITY, ...values }));
     const view = new Transform({ position: [...eye, 1], rotation: Transform.lookRotation(eye, target) });
     app.world.insert(
@@ -583,6 +584,7 @@ export const SHOTS: Record<string, Shot> = {
             // chão olhando para o lado dele, um pouco acima do horizonte (o céu passa do azul ao laranja e ao vermelho, as
             // nuvens recebem a luz alaranjada e ficam contra o céu); a exposição pelo fotômetro.
             cloudTerrain(app);
+            // A névoa seca do fim da tarde perto do chão (spec 041, R21: 0,05/km, 500 m): o ar onde os feixes aparecem.
             const { setSun } = cloudSky(
                 app,
                 60,
@@ -590,11 +592,37 @@ export const SHOTS: Record<string, Shot> = {
                 [0, 2, 0],
                 [800, 260, 600],
                 SUNSET_TURBIDITY,
+                { extinction: 0.05, scaleHeight: 0.5 },
             );
             return (i) => {
                 const t = i / 1199;
                 // Mais tempo perto do horizonte (onde a cor muda): a elevação desce pela raiz do tempo invertida.
                 setSun(-4 + 64 * (1 - t) ** 1.6);
+            };
+        },
+    },
+    raios: {
+        frames: 900,
+        warmup: 600,
+        build(app) {
+            // Raios de sol no céu azul (spec 041, R21): a câmera no chão olhando contra o sol a 38°, cúmulos de tempo bom
+            // passando na frente dele com o vento e uma névoa seca leve perto do chão (0,08/km, 800 m) — os feixes de luz
+            // e de sombra saem dos vãos das nuvens no ar entre elas e a câmera (a atmosfera nos froxels, com a sombra das
+            // nuvens e do terreno).
+            cloudTerrain(app);
+            const { move } = cloudSky(
+                app,
+                38,
+                { coverage: 0.5, type: 0.45, wind: [9, 4], base: 1300, top: 2900 },
+                [0, 2, 0],
+                [800, 560, 600],
+                2,
+                { extinction: 0.08, scaleHeight: 0.8 },
+            );
+            return (i) => {
+                // Um giro lento de 6° para o lado do sol durante a tomada.
+                const a = Math.atan2(0.6, 0.8) - 0.05 + (i / 899) * 0.1;
+                move([0, 2, 0], [1000 * Math.cos(a), 560, 1000 * Math.sin(a)]);
             };
         },
     },
