@@ -584,7 +584,8 @@ export const SHOTS: Record<string, Shot> = {
             // chão olhando para o lado dele, um pouco acima do horizonte (o céu passa do azul ao laranja e ao vermelho, as
             // nuvens recebem a luz alaranjada e ficam contra o céu); a exposição pelo fotômetro.
             cloudTerrain(app);
-            // A névoa seca do fim da tarde perto do chão (spec 041, R21: 0,05/km, 500 m): o ar onde os feixes aparecem.
+            // A névoa seca do fim da tarde perto do chão (spec 041, R21: 0,15/km, 600 m — ~20 km de visibilidade, o ar
+            // úmido da foto do pôr do sol): o ar onde os feixes aparecem.
             const { setSun } = cloudSky(
                 app,
                 60,
@@ -592,7 +593,7 @@ export const SHOTS: Record<string, Shot> = {
                 [0, 2, 0],
                 [800, 260, 600],
                 SUNSET_TURBIDITY,
-                { extinction: 0.05, scaleHeight: 0.5 },
+                { extinction: 0.15, scaleHeight: 0.6 },
             );
             return (i) => {
                 const t = i / 1199;
@@ -606,7 +607,8 @@ export const SHOTS: Record<string, Shot> = {
         warmup: 600,
         build(app) {
             // Raios de sol no céu azul (spec 041, R21): a câmera no chão olhando contra o sol a 38°, cúmulos de tempo bom
-            // passando na frente dele com o vento e uma névoa seca leve perto do chão (0,08/km, 800 m) — os feixes de luz
+            // passando na frente dele com o vento e o ar úmido perto do chão (névoa seca de 0,25/km até ~1,2 km: ~15 km de
+            // visibilidade, como na foto do céu azul com névoa) — os feixes de luz
             // e de sombra saem dos vãos das nuvens no ar entre elas e a câmera (a atmosfera nos froxels, com a sombra das
             // nuvens e do terreno).
             cloudTerrain(app);
@@ -617,7 +619,7 @@ export const SHOTS: Record<string, Shot> = {
                 [0, 2, 0],
                 [800, 560, 600],
                 2,
-                { extinction: 0.08, scaleHeight: 0.8 },
+                { extinction: 0.25, scaleHeight: 1.2 },
             );
             return (i) => {
                 // Um giro lento de 6° para o lado do sol durante a tomada.
