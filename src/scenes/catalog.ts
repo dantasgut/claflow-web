@@ -666,36 +666,39 @@ export const SHOTS: Record<string, Shot> = {
         frames: 960,
         warmup: 600,
         build(app) {
-            // Os raios chegando ao chão (spec 041, R21; pedido do usuário): o sol dourado a 12°, estratocúmulos fragmentados
-            // (1,2–1,9 km, cobertura 0,6, células de ~3 km com vãos) andando com o vento, o ar úmido de ~15 km de
-            // visibilidade (névoa seca de 0,25/km até 1,2 km), a câmera a 5 m olhando na diagonal, 22° ao lado do sol (fora
-            // do quadro), 5° acima do horizonte, com as colinas e a grama à frente: os feixes descem dos vãos até o chão e
-            // terminam em manchas de sol na grama, ao lado das sombras das nuvens. A 65° do sol, o feixe de 400 m soma 1 % à
-            // luz do ar (a névoa úmida espalha para a frente; referência f64); a 22°, ~20 %.
+            // Os raios chegando ao chão perto da câmera (spec 041, R21; pedido do usuário): o sol de fim de tarde a 35° tapado
+            // por uma camada baixa e densa de estratocúmulos (700–950 m, extinção 0,3/m, cobertura 0,87, células de ~1,5 km com
+            // vãos de
+            // 100–300 m) andando com o vento; o ar úmido de ~13 km de visibilidade (névoa seca de 0,3/km até 1,2 km); a câmera
+            // a 3 m, 25° ao lado do azimute do sol e levantada 10°: a base da nuvem com os vãos em cima, os feixes descendo
+            // pelo meio do quadro e as manchas de sol na grama embaixo, a poucas centenas de metros. Com o sol a 35°, o raio
+            // atravessa a camada deslocando-se (espessura/2)/tan(elevação) ≈ 180 m para cada lado do eixo do vão: a camada
+            // fina deixa passar o sol pelos vãos de centenas de metros (uma de 1 km não deixaria — referência f64).
             cloudTerrain(app);
             const target = (el: number, az: number): Vec3 => {
                 const e = (el * Math.PI) / 180;
                 const a = Math.atan2(0.6, 0.8) + (az * Math.PI) / 180;
-                return [1000 * Math.cos(e) * Math.cos(a), 5 + 1000 * Math.sin(e), 1000 * Math.cos(e) * Math.sin(a)];
+                return [1000 * Math.cos(e) * Math.cos(a), 3 + 1000 * Math.sin(e), 1000 * Math.cos(e) * Math.sin(a)];
             };
             const { move } = cloudSky(
                 app,
-                12,
+                35,
                 {
-                    coverage: 0.6,
+                    coverage: 0.87,
                     type: 0.3,
-                    base: 1200,
-                    top: 1900,
-                    wind: [9, 4],
-                    shapeScale: 3000,
-                    detailScale: 600,
+                    density: 0.3,
+                    base: 700,
+                    top: 950,
+                    wind: [6, 3],
+                    shapeScale: 1500,
+                    detailScale: 300,
                 },
-                [0, 5, 0],
-                target(5, 22),
+                [0, 3, 0],
+                target(10, 25),
                 2,
-                { extinction: 0.25, scaleHeight: 1.2 },
+                { extinction: 0.3, scaleHeight: 1.2 },
             );
-            return (i) => move([0, 5, 0], target(5, 26 - (8 * i) / 959));
+            return (i) => move([0, 3, 0], target(10, 27 - (4 * i) / 959));
         },
     },
     solpostolento: {
