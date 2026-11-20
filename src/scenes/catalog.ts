@@ -528,15 +528,21 @@ fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) ->
     let spot = gr_fbm(xz + vec2f(31.0, 5.0), 0.04, s.footprint);
     let clump = gr_fbm(xz + vec2f(3.0, 47.0), 2.5, s.footprint);
     let grain = gr_fbm(xz + vec2f(71.0, 13.0), 25.0, s.footprint);
-    let lush = vec3f(0.06, 0.1, 0.035);
-    let green = vec3f(0.1, 0.14, 0.05);
-    let dry = vec3f(0.24, 0.22, 0.11);
+    let lush = vec3f(0.035, 0.11, 0.015);
+    let green = vec3f(0.08, 0.2, 0.025);
+    let dry = vec3f(0.3, 0.25, 0.07);
     var grass = mix(lush, green, smoothstep(-0.4, 0.4, field));
     grass = mix(grass, dry, smoothstep(0.15, 0.6, spot + 0.3 * field));
     grass *= 1.0 + 0.35 * clump + 0.45 * grain;
     let soil = vec3f(0.3, 0.24, 0.16) * (1.0 + 0.3 * clump + 0.3 * grain);
-    let c = mix(grass, soil, smoothstep(0.3, 0.45, slope + 0.08 * clump));
-    return closure_diffuse(clamp(c, vec3f(0.0), vec3f(1.0)), 0.0);
+    let soil_t = smoothstep(0.3, 0.45, slope + 0.08 * clump);
+    let c = clamp(mix(grass, soil, soil_t), vec3f(0.0), vec3f(1.0));
+    // A folha de grama tem cutícula de cera (dielétrico, n ≈ 1,45) sobre o tecido difuso: olhando rente ao chão contra o
+    // sol, o Fresnel da cera reflete a luz dourada do sol baixo; o dossel de folhas finas dá o brilho de fibra (sheen).
+    // A terra exposta, quase sem cera.
+    let base = closure_add(closure_diffuse(c, 0.0), closure_scale(closure_sheen(clamp(c * 3.0, vec3f(0.0), vec3f(1.0)), 0.6), 1.0));
+    let wax = closure_dielectric(1.45, vec3f(1.0), 0.8, 0.0, vec3f(1.0, 0.0, 0.0));
+    return closure_layer(wax, base, vec3f(1.0), mix(0.6, 0.15, soil_t));
 }`,
                 }),
             )
@@ -598,6 +604,28 @@ export const SHOTS: Record<string, Shot> = {
             return (i) => {
                 const t = i / 1199;
                 // Mais tempo perto do horizonte (onde a cor muda): a elevação desce pela raiz do tempo invertida.
+                setSun(-4 + 64 * (1 - t) ** 1.6);
+            };
+        },
+    },
+    'solposto-chao': {
+        frames: 1200,
+        warmup: 600,
+        build(app) {
+            // O `solposto` com a câmera apontada para o chão (spec 041): a mesma cena, só que 3° abaixo do horizonte (o sol e
+            // os raios no alto do quadro), para ver a luz dourada no gramado perto da câmera.
+            cloudTerrain(app);
+            const { setSun } = cloudSky(
+                app,
+                60,
+                { coverage: 0.4, type: 0.5, wind: [6, 2] },
+                [0, 2, 0],
+                [800, 2 - 1000 * Math.tan((3 * Math.PI) / 180), 600],
+                SUNSET_TURBIDITY,
+                { extinction: 0.15, scaleHeight: 0.6 },
+            );
+            return (i) => {
+                const t = i / 1199;
                 setSun(-4 + 64 * (1 - t) ** 1.6);
             };
         },
