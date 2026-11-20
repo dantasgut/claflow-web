@@ -666,21 +666,50 @@ export const SHOTS: Record<string, Shot> = {
         frames: 840,
         warmup: 600,
         build(app) {
-            // Os raios chegando ao chão perto da câmera (spec 041, R21 rodadas 19, 22 e 24; pedido do usuário): o sol de fim
-            // de tarde a 20° atrás de um estratocúmulo fragmentado — uma camada fina (750–900 m) de cobertura 0,78 e tipo
-            // 0,25 —, os vãos vindos só dos parâmetros da camada (a cobertura, o tipo e as escalas da forma, 1800 m, e do
-            // detalhe, 300 m: o ruído de Perlin-Worley com a erosão dá vãos de tamanhos e formas variados e borda irregular),
-            // andando com o vento. A luz de um vão na base (h ≈ 800 m) cai no chão h/tan(20°) ≈ 2,2 km mais perto de quem
-            // olha para o sol. O lugar (rodada 24) saiu do mapa de sombras de cima calculado pela referência f64 das nuvens
-            // (a mesma camada, `opticalDepth` na direção do sol sobre o chão do `cloudTerrain`): a câmera 3 m acima do
-            // chão, na sombra, quase horizontal (levantada 1°, o horizonte no meio do quadro, o sol 5° à direita), com o
-            // chão aceso de um vão de ~300 m entre 225 e 700 m à frente — os feixes do vão descendo do sol até ali. O ar
-            // úmido rente ao chão (névoa seca de 1/km com altura de escala de 300 m): o feixe perto tem ar bastante, e o
-            // sol direto que chega ao chão inclinado perde pouco (profundidade ótica vertical 0,3, contra 0,72 da névoa de
-            // 0,6/km até 1,2 km), a grama no sol ~3 × a da sombra.
+            // Os raios chegando ao chão perto da câmera (spec 041, R21 rodadas 19, 22, 24 e 25; pedido do usuário: "basta
+            // densificar mais as nuvens mas parametrizar pontos por onde os raios conseguem passar"): o sol de fim de tarde
+            // a 20° atrás de um convés grosso e fechado de estratocúmulos (750–1150 m, extinção 0,8/m, tipo 0,4, cobertura
+            // 0,86 fora dos vãos, forma de 1400 m e detalhe de 250 m: escuro por baixo, sem buracos de azul) com vãos em pontos dados pela cena (a função de cobertura, no
+            // referencial do vento). Cada vão é posto pela mancha de sol que acende no chão: [adiante (m, no rumo do sol, a
+            // partir da câmera), ao lado (m), raio (m)]. O centro fica (meia altura da camada − chão)/tan 20° ≈ 2,5 km além
+            // da mancha no rumo do sol; um vão vertical deixa o sol atravessar a camada se o raio passa de
+            // (espessura/2)/tan 20° ≈ 550 m, e a mancha acesa no chão tem 2 (raio − 550 m) ao longo do rumo do sol. O vão do
+            // meio (raio 700 m, na linha câmera → sol) acende ~300 m de grama a 250–550 m da câmera, que fica na sombra (vãos
+            // menores ao lado mostravam o azul e foram tirados). A borda: três harmônicos no raio e a transição de ±250 m da
+            // cobertura, que a
+            // forma de Perlin-Worley e a erosão recortam (sem círculo liso). O ar úmido rente ao chão (névoa seca de 1/km com
+            // altura de escala de 300 m), a câmera 3 m acima do chão, quase horizontal (rodada 24).
             const elevation = 20;
+            const [base, top] = [750, 1150];
+            const wind: [number, number] = [2.5, -1.5];
             const eye: Vec3 = [-938, 51.5, 4024];
             const a0 = Math.atan2(0.6, 0.8);
+            // O chão em volta das manchas (m) e o meio da tomada em tempo simulado (s: 600 quadros de aquecimento e metade
+            // dos 840): o vão no mundo é o do referencial do vento mais o vento × tempo.
+            const ground = 45;
+            const mid = (600 + 420) / 60;
+            const shift = (0.5 * (base + top) - ground) / Math.tan((elevation * Math.PI) / 180);
+            const spots: [number, number, number][] = [
+                [400, 0, 700],
+            ];
+            const holes = spots.map(([ahead, side, r], k) => {
+                const along = ahead + shift;
+                const x = eye[0] + along * 0.8 - side * 0.6 - wind[0] * mid;
+                const z = eye[2] + along * 0.6 + side * 0.8 - wind[1] * mid;
+                return `vec4f(${x.toFixed(1)}, ${z.toFixed(1)}, ${r.toFixed(1)}, ${(k * 2.39 + 0.7).toFixed(2)})`;
+            });
+            const code = /* wgsl */ `fn coverage_fn(xz: vec2f, time: f32, data: CoverageFnParams) -> vec3f {
+    var holes = array<vec4f, ${holes.length}>(${holes.join(', ')});
+    var c = 1.0;
+    for (var k = 0u; k < ${holes.length}u; k++) {
+        let h = holes[k];
+        let d = xz - h.xy;
+        let t = atan2(d.y, d.x);
+        let r = h.z * (1.0 + 0.12 * sin(3.0 * t + h.w) + 0.07 * sin(5.0 * t + 1.7 * h.w) + 0.04 * sin(11.0 * t + 2.3 * h.w));
+        c = min(c, smoothstep(r - 250.0, r + 250.0, length(d)));
+    }
+    return vec3f(0.86 * c, 0.4, 1.0);
+}`;
             const target = (el: number, az: number): Vec3 => {
                 const e = (el * Math.PI) / 180;
                 const a = a0 + (az * Math.PI) / 180;
@@ -695,14 +724,14 @@ export const SHOTS: Record<string, Shot> = {
                 app,
                 elevation,
                 {
-                    coverage: 0.78,
-                    type: 0.25,
-                    density: 0.6,
-                    base: 750,
-                    top: 900,
-                    wind: [2.5, -1.5],
-                    shapeScale: 1800,
-                    detailScale: 300,
+                    coverage: { code },
+                    type: 0.4,
+                    density: 0.8,
+                    base,
+                    top,
+                    wind,
+                    shapeScale: 1400,
+                    detailScale: 250,
                 },
                 eye,
                 target(1, -5),
