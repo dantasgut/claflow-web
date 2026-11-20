@@ -679,7 +679,7 @@ export const SHOTS: Record<string, Shot> = {
             // cobertura, que a
             // forma de Perlin-Worley e a erosão recortam (sem círculo liso). O ar úmido rente ao chão (névoa seca de 1/km com
             // altura de escala de 300 m), a câmera 3 m acima do chão, quase horizontal (rodada 24).
-            const elevation = 20;
+            const elevation = 14;
             const [base, top] = [750, 1150];
             const wind: [number, number] = [2.5, -1.5];
             const eye: Vec3 = [-850, 51.4, 4090];
@@ -690,7 +690,7 @@ export const SHOTS: Record<string, Shot> = {
             const mid = (600 + 420) / 60;
             const shift = (0.5 * (base + top) - ground) / Math.tan((elevation * Math.PI) / 180);
             const spots: [number, number, number][] = [
-                [200, 0, 760],
+                [-200, 0, 1000],
             ];
             const holes = spots.map(([ahead, side, r], k) => {
                 const along = ahead + shift;
