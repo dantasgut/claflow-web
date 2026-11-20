@@ -5,7 +5,7 @@
 // agitada vista de cima, fundo de areia), natureza (vale com relevo, céu, luz global e o lago), cornell (caixa de Cornell
 // com a luz global), dia (cômodo com janela, o sol andando), nevoa (o mesmo cômodo com névoa), pano (tecido XPBD), sprites
 // (partículas e os vértices de uma esfera como sprites), ondulacao (lâmina de água com ondulações e a esfera de vidro
-// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, raios, solpostolento, solpostooposto, voo, sombrasnuvens,
+// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, raios, raios-vaos, raios-chao, solpostolento, solpostooposto, voo, sombrasnuvens,
 // tempestade). O tamanho vem da URL (`?w=`, `?h=`; padrão 1280 × 720).
 import * as clayflow from 'clayflow/web';
 import {
@@ -626,6 +626,76 @@ export const SHOTS: Record<string, Shot> = {
                 const a = Math.atan2(0.6, 0.8) - 0.05 + (i / 899) * 0.1;
                 move([0, 2, 0], [1000 * Math.cos(a), 560, 1000 * Math.sin(a)]);
             };
+        },
+    },
+    'raios-vaos': {
+        frames: 900,
+        warmup: 600,
+        build(app) {
+            // Os raios das fotos (spec 041, R21): o sol a 15° atrás de uma camada de estratocúmulos fragmentados (1,4–2,1 km,
+            // cobertura 0,7, células de ~3 km com vãos de centenas de metros) entre a câmera e ele, a câmera no chão olhando
+            // para o sol 5° abaixo dele e o ar úmido de ~13 km de visibilidade (névoa seca de 0,3/km até 1,5 km): o feixe é o
+            // ar entre a câmera e a base da camada, aceso pelo vão e escuro na sombra.
+            cloudTerrain(app);
+            const target = (el: number, az: number): Vec3 => {
+                const e = (el * Math.PI) / 180;
+                const a = Math.atan2(0.6, 0.8) + (az * Math.PI) / 180;
+                return [1000 * Math.cos(e) * Math.cos(a), 2 + 1000 * Math.sin(e), 1000 * Math.cos(e) * Math.sin(a)];
+            };
+            const { move } = cloudSky(
+                app,
+                15,
+                {
+                    coverage: 0.7,
+                    type: 0.2,
+                    base: 1400,
+                    top: 2100,
+                    wind: [4, 1],
+                    shapeScale: 3000,
+                    detailScale: 600,
+                },
+                [0, 2, 0],
+                target(10, 0),
+                2,
+                { extinction: 0.3, scaleHeight: 1.5 },
+            );
+            return (i) => move([0, 2, 0], target(10, -3 + (6 * i) / 899));
+        },
+    },
+    'raios-chao': {
+        frames: 960,
+        warmup: 600,
+        build(app) {
+            // Os raios chegando ao chão (spec 041, R21; pedido do usuário): o sol dourado a 12°, estratocúmulos fragmentados
+            // (1,2–1,9 km, cobertura 0,6, células de ~3 km com vãos) andando com o vento, o ar úmido de ~15 km de
+            // visibilidade (névoa seca de 0,25/km até 1,2 km), a câmera a 5 m olhando na diagonal, 22° ao lado do sol (fora
+            // do quadro), 5° acima do horizonte, com as colinas e a grama à frente: os feixes descem dos vãos até o chão e
+            // terminam em manchas de sol na grama, ao lado das sombras das nuvens. A 65° do sol, o feixe de 400 m soma 1 % à
+            // luz do ar (a névoa úmida espalha para a frente; referência f64); a 22°, ~20 %.
+            cloudTerrain(app);
+            const target = (el: number, az: number): Vec3 => {
+                const e = (el * Math.PI) / 180;
+                const a = Math.atan2(0.6, 0.8) + (az * Math.PI) / 180;
+                return [1000 * Math.cos(e) * Math.cos(a), 5 + 1000 * Math.sin(e), 1000 * Math.cos(e) * Math.sin(a)];
+            };
+            const { move } = cloudSky(
+                app,
+                12,
+                {
+                    coverage: 0.6,
+                    type: 0.3,
+                    base: 1200,
+                    top: 1900,
+                    wind: [9, 4],
+                    shapeScale: 3000,
+                    detailScale: 600,
+                },
+                [0, 5, 0],
+                target(5, 22),
+                2,
+                { extinction: 0.25, scaleHeight: 1.2 },
+            );
+            return (i) => move([0, 5, 0], target(5, 26 - (8 * i) / 959));
         },
     },
     solpostolento: {
