@@ -28,6 +28,7 @@ import { closureFn, materialGraph } from './support/materialScenes';
 import { CAUSTIC_SPHERE, CAUSTIC_SUN } from './support/causticScenes';
 import { WATER_SPACING, waterLook, waterScene } from './support/waterScene';
 import { loadHdr } from './support/hdr';
+import { MATERIAL_SHOTS } from './materiais';
 
 /**
  * A luz de um dia de sol na `agua`: o sol direto 6 a 8 vezes a luz do céu no chão (medido com a panorâmica a 0,6 e o
@@ -551,6 +552,8 @@ fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) ->
 }
 
 export const SHOTS: Record<string, Shot> = {
+    // A biblioteca de materiais (spec 011, T112): a galeria girando e o material editado (`materiais.ts`).
+    ...MATERIAL_SHOTS,
     nuvens: {
         frames: 480,
         warmup: 600,
