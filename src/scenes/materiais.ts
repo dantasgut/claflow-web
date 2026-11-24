@@ -768,8 +768,9 @@ function faceShot(skin: Values, iris: Values = {}, close = false, hard = false):
                 // Os painéis a um terço (a luz de preenchimento e o reflexo nos olhos): a principal modela o rosto.
                 studio(app, 0.33);
                 directional(app, FACE_KEY, 2, true);
-                // A contraluz projeta sombra: é do mapa de sombra dela que sai a espessura que a luz atravessa (a orelha).
-                directional(app, FACE_BACK, 1.8, true);
+                // A contraluz sem sombra: com ela a luz atravessaria as partes finas (a orelha), mas a espessura lida do mapa
+                // de sombra sai zero em manchas na borda do rosto (defeito em aberto; ver `pele-rosto-luz-dura`).
+                directional(app, FACE_BACK, 1.8);
                 // A caixa de luz do retrato, à frente e acima: a luz macia no rosto e o reflexo dela na córnea.
                 const box: Vec3 = [-1.5, 2.1, 3.4];
                 const aim = unit3(sub3([0, 0.75, 0.3], box));
