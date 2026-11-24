@@ -732,7 +732,7 @@ function face(app: Application, fn: MaterialFunction, iris: Values): Promise<voi
  * A cena do rosto: a luz principal de frente e de lado, com sombra, a contraluz por trás da orelha e os painéis do
  * estúdio (o reflexo nos olhos), a câmera orbitando; `close`: a câmera de perto, na altura dos olhos.
  */
-function faceShot(skin: Values, iris: Values = {}, close = false): Shot {
+function faceShot(skin: Values, iris: Values = {}, close = false, hard = false): Shot {
     return {
         frames: GALLERY_FRAMES,
         warmup: WARMUP,
@@ -758,22 +758,31 @@ function faceShot(skin: Values, iris: Values = {}, close = false): Shot {
                     far: 60,
                 }).add(view),
             );
-            // Os painéis a um terço (a luz de preenchimento e o reflexo nos olhos): a principal modela o rosto.
-            studio(app, 0.33);
-            directional(app, FACE_KEY, 2, true);
-            directional(app, FACE_BACK, 1.8);
-            // A caixa de luz do retrato, à frente e acima: a luz macia no rosto e o reflexo dela na córnea.
-            const box: Vec3 = [-1.5, 2.1, 3.4];
-            const aim = unit3(sub3([0, 0.75, 0.3], box));
-            app.world.insert(
-                new RectLight({
-                    position: [...box, 1],
-                    direction: [...aim, 0],
-                    right: cross3(aim, [0, 1, 0]),
-                    size: [1.2, 1.2],
-                    intensity: 8,
-                }),
-            );
+            if (hard) {
+                // A luz dura de lado e a contraluz atrás da orelha, quase sem preenchimento: o terminador cruza o
+                // rosto e a luz atravessa a orelha — onde o espalhamento sob a pele aparece.
+                studio(app, 0.08);
+                directional(app, [0.9, 0.3, 0.45], 2.6, true);
+                directional(app, [-0.5, 0.3, -0.8], 1.3, true);
+            } else {
+                // Os painéis a um terço (a luz de preenchimento e o reflexo nos olhos): a principal modela o rosto.
+                studio(app, 0.33);
+                directional(app, FACE_KEY, 2, true);
+                // A contraluz projeta sombra: é do mapa de sombra dela que sai a espessura que a luz atravessa (a orelha).
+                directional(app, FACE_BACK, 1.8, true);
+                // A caixa de luz do retrato, à frente e acima: a luz macia no rosto e o reflexo dela na córnea.
+                const box: Vec3 = [-1.5, 2.1, 3.4];
+                const aim = unit3(sub3([0, 0.75, 0.3], box));
+                app.world.insert(
+                    new RectLight({
+                        position: [...box, 1],
+                        direction: [...aim, 0],
+                        right: cross3(aim, [0, 1, 0]),
+                        size: [1.2, 1.2],
+                        intensity: 8,
+                    }),
+                );
+            }
             backdrop(app, -0.1, 0.07);
             void face(app, faceSkin(skin), iris);
             return (i) => {
@@ -853,6 +862,8 @@ export function materialStage(app: Application, name: MaterialName): MaterialSta
 export const MATERIAL_SHOTS: Record<string, Shot> = {
     // A pele no rosto da malha base do MakeHuman.
     'pele-rosto': faceShot({}),
+    'pele-rosto-luz-dura-sem': faceShot({ radius: [0, 0, 0] }, {}, true, true),
+    'pele-rosto-luz-dura': faceShot({}, {}, true, true),
     'pele-rosto-perto': faceShot({}, {}, true),
     'pele-rosto-escura': faceShot(
         { melanin: 0.85, blood: 0.3, freckles: 0 },
