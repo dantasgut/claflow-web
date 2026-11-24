@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Application, createScene } from 'clayflow/web';
 import { H, SHOTS, W } from './scenes/catalog';
 import { FpsCounter, ScenePanel } from './ScenePanel';
+import { galleryMaterial, MaterialGallery } from './MaterialGallery';
 import { TimeControls } from './TimeControls';
 import { TimeNavigator } from './TimeNavigator';
 
@@ -12,12 +13,18 @@ const NAMES = Object.keys(SHOTS);
  * do navegador e o movimento da cena por quadro (o mesmo da gravação); sem cena, a lista.
  */
 export default function App() {
+    const material = galleryMaterial();
+    if (material !== undefined) return <MaterialGallery name={material} />;
     const scene = new URLSearchParams(location.search).get('scene');
     if (scene === null || !(scene in SHOTS)) {
         return (
             <main style={{ padding: 24 }}>
                 <h1>clayflow-web</h1>
                 <p>As cenas do motor clayflow.</p>
+                <p style={{ margin: '12px 0' }}>
+                    <a href="?material=gold">Galeria de materiais</a> — um material por vez, com os nós e os
+                    parâmetros.
+                </p>
                 <ul>
                     {NAMES.map((n) => (
                         <li key={n}>

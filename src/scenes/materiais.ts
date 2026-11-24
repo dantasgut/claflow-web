@@ -31,7 +31,7 @@ import { materialGraph } from './support/materialScenes';
 type Vec3 = readonly [number, number, number];
 type Values = Record<string, number | number[]>;
 /** Uma função de extensão com o registro de parâmetros (o material e o deslocamento). */
-interface Valued {
+export interface Valued {
     readonly params: Readonly<Record<string, unknown>>;
     readonly values: Record<string, unknown>;
 }
@@ -521,7 +521,7 @@ function showcase(family: Showcase): Shot {
             const R = 0.6;
             const move = galleryCamera(app, 1.17);
             const lights = studio(app);
-            const key = directional(app, GALLERY_SUN, 1.5, true);
+            directional(app, GALLERY_SUN, 1.5, true);
             backdrop(app, -0.1, 0.12);
             const text = overlay(app);
             for (const [name, c] of rows(family.back, family.front, R, 1.45)) {
@@ -537,7 +537,6 @@ function showcase(family: Showcase): Shot {
             return (i) => {
                 const t = i / (GALLERY_FRAMES - 1);
                 lights(2 * Math.PI * t);
-                key.from(turn(GALLERY_SUN, mix(-40, 40, t) * DEG));
                 text.place(move(orbit(t)));
             };
         },
@@ -616,6 +615,70 @@ function faceShot(material: () => MaterialFunction): Shot {
             };
         },
     };
+}
+
+// ── A galeria individual: um material por vez, com os valores editáveis ─────────────────────────────────────────────
+/** As famílias da galeria (as da vitrine): o nome e os materiais de cada uma. */
+export const MATERIAL_FAMILIES: readonly (readonly [string, readonly MaterialName[]])[] = Object.entries(
+    SHOWCASE,
+).map(([name, family]) => [name, [...family.back, ...family.front]]);
+
+/** O palco de um material: a função do material e a do deslocamento (quando o relevo vai à geometria) e a câmera. */
+export interface MaterialStage {
+    readonly material: Valued;
+    readonly displacement?: Valued;
+    /** Os valores que o palco deu ao material (a escala do mundo e a do padrão), por cima dos padrões da biblioteca. */
+    readonly staged: Values;
+    readonly camera: Camera;
+    readonly eye: Vec3;
+    readonly target: Vec3;
+}
+
+/**
+ * Monta o palco do material `name`: uma esfera grande sob os painéis do estúdio e uma luz direcional com sombra, no
+ * chão neutro; a esfera é a de malha adaptativa com o deslocamento quando o material tem o relevo na geometria.
+ */
+export function materialStage(app: Application, name: MaterialName): MaterialStage {
+    const R = 1;
+    const target: Vec3 = [0, R - 0.1, 0];
+    const eye: Vec3 = [0, 2.3, 5.4];
+    const camera = new Camera({
+        projection: 'perspective',
+        fov: 26 * DEG,
+        aspect: W / H,
+        aspectMode: 'fixed',
+        near: 0.3,
+        far: 60,
+    });
+    camera.add(
+        new Transform({
+            position: [...eye, 1],
+            rotation: Transform.lookRotation([...eye], [...target]),
+        }),
+    );
+    app.world.insert(camera);
+    studio(app);
+    directional(app, GALLERY_SUN, 1.5, true);
+    backdrop(app, -0.1, 0.12);
+    const displaced = SHOWCASE_RELIEF[name];
+    const piece: Piece = {
+        name,
+        at: [0, R - 0.1, 0],
+        radius: R,
+        ...(displaced !== undefined ? { displaced, front: true } : {}),
+    };
+    const made = ball(app, piece);
+    const staged: Values =
+        displaced !== undefined
+            ? {
+                  pattern_scale:
+                      nodes.material[name].params.pattern_scale?.type === 'f32'
+                          ? displaced.pattern[0]
+                          : [...displaced.pattern],
+                  scale: displaced.scale,
+              }
+            : galleryValues(name, [2, 1], R);
+    return { ...made, staged, camera, eye, target };
 }
 
 export const MATERIAL_SHOTS: Record<string, Shot> = {
