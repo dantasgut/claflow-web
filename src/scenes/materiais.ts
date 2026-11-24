@@ -583,8 +583,10 @@ const facePoint = (x: number, y: number, z: number): Vec3 => {
     return [x * k, (y - FACE_NECK) * k, (z - 0.6) * k];
 };
 /** O centro e o raio dos globos oculares na malha (os grupos `helper-l-eye` e `helper-r-eye`). */
-const FACE_EYES: readonly Vec3[] = [facePoint(0.308, 7.284, 1.245), facePoint(-0.308, 7.284, 1.245)];
-const FACE_EYE_RADIUS = (0.138 * FACE_SCALE) / 10;
+// O globo um pouco maior e mais à frente que o do arquivo: a malha subdividida recua nas pálpebras, e o globo tem de
+// encostar na dobra de dentro delas.
+const FACE_EYES: readonly Vec3[] = [facePoint(0.308, 7.284, 1.262), facePoint(-0.308, 7.284, 1.262)];
+const FACE_EYE_RADIUS = (0.152 * FACE_SCALE) / 10;
 
 /**
  * A pele do rosto: `skinDetailed` com as entradas por região ligadas a máscaras na posição do objeto — o sangue mais
@@ -602,7 +604,7 @@ interface FaceLook {
 }
 const FACE_ROSY: FaceLook = {
     flush: 1,
-    lip: [0.5, 0.22, 0.22],
+    lip: [0.45, 0.11, 0.12],
     lid: [0.88, 0.78, 0.76],
     gloss: 0.5,
 };
@@ -663,7 +665,7 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
     const earL = blob('ear_l', facePoint(0.85, 7.2, 0.35), 0.06, 0.26);
     const earR = blob('ear_r', facePoint(-0.85, 7.2, 0.35), 0.06, 0.26);
     const brow = blob('brow', facePoint(0, 7.85, 1.4), 0.1, 0.42);
-    const lips = blob('lips', facePoint(0, 6.6, 1.58), 0.08, 0.2, [1, 2.8, 1]);
+    const lips = blob('lips', facePoint(0, 6.6, 1.58), 0.13, 0.19, [1, 3.1, 1]);
     // O contorno dos olhos: a pele fina das pálpebras, mais vermelha e mais escura.
     const socketL = blob('socket_l', facePoint(0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
     const socketR = blob('socket_r', facePoint(-0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
@@ -687,6 +689,80 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
             ]),
             'skin.oil_mask',
         ],
+    );
+    // Os vincos da asa do nariz: um sulco em arco em volta de cada asa (a distância ao centro da asa perto do raio do
+    // arco), só do lado de fora e de cima (a máscara), como relevo em milímetros somado ao da pele. O perfil é o
+    // quadrado de uma tenda (v², v = 1 − |d − R|/w): o gradiente dele, −2 v sinal(d − R)/w na direção do raio.
+    const crease = (id: string, at: Vec3, radius: number, width: number, mask: string): [string, string] => {
+        graph[`${id}_c`] = nodes.math.value3.with({ value: [...at] });
+        graph[`${id}_v`] = nodes.math.sub3;
+        graph[`${id}_d`] = nodes.math.length;
+        graph[`${id}_r`] = nodes.math.value.with({ value: radius });
+        graph[`${id}_o`] = nodes.math.sub;
+        graph[`${id}_a`] = nodes.math.abs;
+        graph[`${id}_t`] = nodes.map.range.with({ in_min: 0, in_max: width, out_min: 1, out_max: 0 });
+        graph[`${id}_m`] = nodes.math.mul;
+        graph[`${id}_h`] = nodes.math.mul;
+        graph[`${id}_e`] = nodes.math.value.with({ value: 1e-5 });
+        graph[`${id}_f`] = nodes.math.max;
+        graph[`${id}_s`] = nodes.math.div;
+        graph[`${id}_k`] = nodes.math.value.with({ value: -2 / width });
+        graph[`${id}_q`] = nodes.math.mul;
+        graph[`${id}_w`] = nodes.math.mul;
+        graph[`${id}_n`] = nodes.math.normalize;
+        graph[`${id}_g`] = nodes.math.scale3;
+        links.push(
+            ['s.object_position', `${id}_v.a`],
+            [`${id}_c.value`, `${id}_v.b`],
+            [`${id}_v.value`, `${id}_d.v`],
+            [`${id}_d.value`, `${id}_o.a`],
+            [`${id}_r.value`, `${id}_o.b`],
+            [`${id}_o.value`, `${id}_a.x`],
+            [`${id}_a.value`, `${id}_t.x`],
+            // v pela máscara; a altura v².
+            [`${id}_t.value`, `${id}_m.a`],
+            [mask, `${id}_m.b`],
+            [`${id}_m.value`, `${id}_h.a`],
+            [`${id}_m.value`, `${id}_h.b`],
+            // O sinal de (d − R) e o coeficiente do gradiente.
+            [`${id}_a.value`, `${id}_f.a`],
+            [`${id}_e.value`, `${id}_f.b`],
+            [`${id}_o.value`, `${id}_s.a`],
+            [`${id}_f.value`, `${id}_s.b`],
+            [`${id}_m.value`, `${id}_q.a`],
+            [`${id}_s.value`, `${id}_q.b`],
+            [`${id}_q.value`, `${id}_w.a`],
+            [`${id}_k.value`, `${id}_w.b`],
+            [`${id}_v.value`, `${id}_n.v`],
+            [`${id}_n.value`, `${id}_g.v`],
+            [`${id}_w.value`, `${id}_g.s`],
+        );
+        return [`${id}_h.value`, `${id}_g.value`];
+    };
+    const wingL = blob('wing_l', facePoint(0.29, 6.92, 1.42), 0.02, 0.11);
+    const wingR = blob('wing_r', facePoint(-0.29, 6.92, 1.42), 0.02, 0.11);
+    const [hl, gl] = crease('alar_l', facePoint(0.17, 6.86, 1.5), 0.085, 0.03, wingL);
+    const [hr, gr] = crease('alar_r', facePoint(-0.17, 6.86, 1.5), 0.085, 0.03, wingR);
+    graph.fold_h = nodes.math.add;
+    graph.fold_g = nodes.math.add3;
+    graph.fold_space = nodes.surface.solidSpace;
+    graph.fold = nodes.surface.solidRelief.with({ height: -0.6 });
+    links.push(
+        [hl, 'fold_h.a'],
+        [hr, 'fold_h.b'],
+        [gl, 'fold_g.a'],
+        [gr, 'fold_g.b'],
+        ['s.object_position', 'fold_space.position'],
+        ['s.dodu', 'fold_space.dodu'],
+        ['s.dodv', 'fold_space.dodv'],
+        ['s.duvdx', 'fold_space.duvdx'],
+        ['s.duvdy', 'fold_space.duvdy'],
+        ['s.footprint', 'fold_space.footprint'],
+        ['fold_h.value', 'fold.value'],
+        ['fold_g.value', 'fold.gradient'],
+        ['fold_space.du', 'fold.du'],
+        ['fold_space.dv', 'fold.dv'],
+        ['fold.value', 'skin.relief'],
     );
     graph.lid_a = nodes.math.value3.with({ value: [1, 1, 1] });
     graph.lid_b = nodes.math.value3.with({ value: [...look.lid] });
@@ -747,6 +823,9 @@ function face(app: Application, fn: MaterialFunction, iris: Values, soft = false
                 scale: k,
                 offset: [0, -FACE_NECK * k, -0.6 * k],
                 keep: (_x, y) => y > 0,
+                // A base do MakeHuman tem poucas faces: dois níveis de subdivisão alisam a orelha, as pálpebras e a
+                // silhueta (o corpo mole fica com a malha de origem: uma partícula por vértice).
+                subdivide: soft ? 0 : 2,
             });
             if (!soft) {
                 app.world.insert(
@@ -875,7 +954,7 @@ function faceShot(
                 app.world.insert(
                     new EnvironmentMap({
                         ...img,
-                        intensity: extra.bounce === true ? 0.15 : 0.04,
+                        intensity: extra.bounce === true ? 0.15 : 0.09,
                         background: false,
                     }),
                 );
@@ -899,7 +978,9 @@ function faceShot(
                         ? { quality: 'high', probeSpacing: 0.25, center: [0, 0.7, 0.2], screenGather: true }
                         : {},
                 );
-                directional(app, [0.7, 0.25, 0.65], 0.3, true);
+                // O preenchimento sem sombra: com ela, a luz dele atravessando a pele (a orelha, a borda do rosto) liga
+                // e desliga de um quadro para o outro conforme as páginas de sombra finas existem ou não — pisca.
+                directional(app, [0.7, 0.25, 0.65], 0.3);
                 directional(app, FACE_KEY, 1.9, true);
                 // A contraluz sem sombra: com ela a luz atravessaria as partes finas (a orelha), mas a espessura lida do mapa
                 // de sombra sai zero em manchas na borda do rosto (defeito em aberto; ver `pele-rosto-luz-dura`).
@@ -912,8 +993,8 @@ function faceShot(
                         position: [...box, 1],
                         direction: [...aim, 0],
                         right: cross3(aim, [0, 1, 0]),
-                        size: [1.2, 1.2],
-                        intensity: 4,
+                        size: [0.7, 0.7],
+                        intensity: 16,
                     }),
                 );
             }
@@ -994,15 +1075,16 @@ export function materialStage(app: Application, name: MaterialName): MaterialSta
 }
 
 const FOTO_SKIN: Values = {
-    melanin: 0.5,
-    blood: 0.35,
+    melanin: 0.36,
+    blood: 0.6,
+    sallow: 0.05,
     freckles: 0.05,
     oil: 0.75,
     oil_roughness: 0.38,
     roughness: 0.62,
-    light_color: [0.7, 0.47, 0.3],
-    dark_color: [0.22, 0.13, 0.07],
-    flush_color: [1, 0.66, 0.6],
+    light_color: [0.72, 0.45, 0.35],
+    dark_color: [0.24, 0.12, 0.08],
+    flush_color: [1, 0.58, 0.55],
 };
 const FOTO_EYE: Values = {
     sclera_color: [0.34, 0.31, 0.28],
@@ -1012,10 +1094,10 @@ const FOTO_EYE: Values = {
     veins: 0.5,
 };
 const FOTO_LOOK: FaceLook = {
-    flush: 0.45,
-    lip: [0.36, 0.17, 0.17],
-    lid: [0.74, 0.66, 0.6],
-    gloss: 0.12,
+    flush: 0.8,
+    lip: [0.4, 0.1, 0.11],
+    lid: [0.8, 0.68, 0.64],
+    gloss: 0.45,
 };
 
 export const MATERIAL_SHOTS: Record<string, Shot> = {
