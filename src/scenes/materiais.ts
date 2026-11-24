@@ -335,10 +335,10 @@ function set(fn: Valued, name: string, value: number | number[]): void {
 }
 
 /** Os painéis do estúdio da galeria e o ambiente escuro; devolve o giro deles em torno do meio da cena. */
-function studio(app: Application): (angle: number) => void {
+function studio(app: Application, gain = 1): (angle: number) => void {
     app.defaults.ambient.data.skyColor = [1, 1, 1, 1];
     app.defaults.ambient.data.groundColor = [1, 1, 1, 1];
-    app.defaults.ambient.data.intensity = GALLERY_STUDIO_AMBIENT;
+    app.defaults.ambient.data.intensity = GALLERY_STUDIO_AMBIENT * gain;
     const lights = GALLERY_PANELS.map((panel) => {
         const aim = unit3(sub3(GALLERY_PANEL_TARGET, panel.at));
         const light = new RectLight({
@@ -346,7 +346,7 @@ function studio(app: Application): (angle: number) => void {
             direction: [...aim, 0],
             right: cross3(aim, [0, 1, 0]),
             size: panel.size,
-            intensity: panel.luminance,
+            intensity: panel.luminance * gain,
         });
         app.world.insert(light);
         const d = light.data.direction;
@@ -551,9 +551,122 @@ const FACE_NECK = 5.9;
 const FACE_KEY: Vec3 = [-0.55, 0.45, 0.7];
 const FACE_BACK: Vec3 = [0.75, 0.3, -0.6];
 
-/** A cabeça da malha base do MakeHuman, com o material `fn`; devolve quando entrou na cena. */
-function face(app: Application, fn: MaterialFunction): Promise<void> {
+/** A posição no objeto de um ponto da malha do MakeHuman (em decímetros no arquivo). */
+const facePoint = (x: number, y: number, z: number): Vec3 => {
     const k = FACE_SCALE / 10;
+    return [x * k, (y - FACE_NECK) * k, (z - 0.6) * k];
+};
+/** O centro e o raio dos globos oculares na malha (os grupos `helper-l-eye` e `helper-r-eye`). */
+const FACE_EYES: readonly Vec3[] = [facePoint(0.308, 7.284, 1.245), facePoint(-0.308, 7.284, 1.245)];
+const FACE_EYE_RADIUS = (0.138 * FACE_SCALE) / 10;
+
+/**
+ * A pele do rosto: `skinDetailed` com as entradas por região ligadas a máscaras na posição do objeto — o sangue mais
+ * perto da superfície nas bochechas, no nariz e nas orelhas; o óleo na testa e no nariz; os lábios mais vermelhos,
+ * mais escuros e mais brilhantes. Cada máscara: 1 dentro do raio interno em volta do ponto, 0 fora do externo.
+ */
+function faceSkin(values: Values): MaterialFunction {
+    const graph: Record<string, unknown> = {
+        s: nodes.input.surfaceSample(),
+        skin: nodes.material.skinDetailed.with({ scale: FACE_SCALE, ...values }),
+    };
+    const links: [string, string][] = [];
+    /** Soma `weight` × máscara em volta de `at` (esticada por `stretch`) ao acumulador `to`; devolve a saída. */
+    const blob = (
+        id: string,
+        at: Vec3,
+        inner: number,
+        outer: number,
+        stretch: Vec3 = [1, 1, 1],
+    ): string => {
+        graph[`${id}_k`] = nodes.math.value3.with({ value: [...stretch] });
+        graph[`${id}_p`] = nodes.math.mul3;
+        graph[`${id}_c`] = nodes.math.value3.with({
+            value: [at[0] * stretch[0], at[1] * stretch[1], at[2] * stretch[2]],
+        });
+        graph[`${id}_d`] = nodes.math.distance;
+        graph[id] = nodes.map.range.with({ in_min: outer, in_max: inner, out_min: 0, out_max: 1 });
+        links.push(
+            ['s.object_position', `${id}_p.a`],
+            [`${id}_k.value`, `${id}_p.b`],
+            [`${id}_p.value`, `${id}_d.a`],
+            [`${id}_c.value`, `${id}_d.b`],
+            [`${id}_d.value`, `${id}.x`],
+        );
+        return `${id}.value`;
+    };
+    /** 1 + a soma das máscaras pesadas. */
+    const total = (id: string, parts: readonly (readonly [string, number])[]): string => {
+        graph[`${id}_one`] = nodes.math.value.with({ value: 1 });
+        let last = `${id}_one.value`;
+        parts.forEach(([mask, weight], i) => {
+            const scaled = `${id}_m${i}`;
+            const sum = `${id}_s${i}`;
+            graph[`${id}_w${i}`] = nodes.math.value.with({ value: weight });
+            graph[scaled] = nodes.math.mul;
+            graph[sum] = nodes.math.add;
+            links.push(
+                [mask, `${scaled}.a`],
+                [`${id}_w${i}.value`, `${scaled}.b`],
+                [`${scaled}.value`, `${sum}.a`],
+                [last, `${sum}.b`],
+            );
+            last = `${sum}.value`;
+        });
+        return last;
+    };
+    const cheekL = blob('cheek_l', facePoint(0.5, 6.85, 1.25), 0.05, 0.3);
+    const cheekR = blob('cheek_r', facePoint(-0.5, 6.85, 1.25), 0.05, 0.3);
+    const nose = blob('nose', facePoint(0, 6.93, 1.62), 0.03, 0.16);
+    const earL = blob('ear_l', facePoint(0.85, 7.2, 0.35), 0.06, 0.26);
+    const earR = blob('ear_r', facePoint(-0.85, 7.2, 0.35), 0.06, 0.26);
+    const brow = blob('brow', facePoint(0, 7.85, 1.4), 0.1, 0.42);
+    const lips = blob('lips', facePoint(0, 6.6, 1.58), 0.08, 0.2, [1, 2.8, 1]);
+    links.push(
+        [
+            total('blood', [
+                [cheekL, 3],
+                [cheekR, 3],
+                [nose, 2.4],
+                [earL, 3.5],
+                [earR, 3.5],
+                [lips, 4],
+            ]),
+            'skin.blood_mask',
+        ],
+        [
+            total('oil', [
+                [brow, 0.7],
+                [nose, 1],
+                [lips, 1.5],
+            ]),
+            'skin.oil_mask',
+        ],
+    );
+    graph.lip_a = nodes.math.value3.with({ value: [1, 1, 1] });
+    graph.lip_b = nodes.math.value3.with({ value: [0.82, 0.5, 0.48] });
+    graph.lip = nodes.math.mix3;
+    links.push(
+        ['lip_a.value', 'lip.a'],
+        ['lip_b.value', 'lip.b'],
+        [lips, 'lip.t'],
+        ['lip.value', 'skin.tint'],
+    );
+    return materialGraph(graph as Parameters<typeof materialGraph>[0], links, 'skin.value');
+}
+
+/** A cabeça da malha base do MakeHuman, com o material `fn`, e os dois globos oculares; devolve quando entrou. */
+function face(app: Application, fn: MaterialFunction, iris: Values): Promise<void> {
+    const k = FACE_SCALE / 10;
+    const lift = -0.1;
+    for (const c of FACE_EYES) {
+        app.world.insert(
+            new SphereGeometry({ radius: FACE_EYE_RADIUS, latSegments: 48, lonSegments: 96 })
+                .add(new StandardMaterial())
+                .add(new Transform({ position: [c[0], c[1] + lift, c[2], 1] }))
+                .add(Materials.eye({ scale: FACE_SCALE, ...iris })),
+        );
+    }
     return fetch(`${import.meta.env.BASE_URL}models/makehuman-base.obj`)
         .then((response) => {
             if (!response.ok) throw new Error(`rosto: o modelo respondeu ${response.status}`);
@@ -568,20 +681,23 @@ function face(app: Application, fn: MaterialFunction): Promise<void> {
                     keep: (_x, y) => y > 0,
                 })
                     .add(new StandardMaterial())
-                    .add(new Transform({ position: [0, -0.1, 0, 1] }))
+                    .add(new Transform({ position: [0, lift, 0, 1] }))
                     .add(fn),
             );
         });
 }
 
-/** A cena do rosto: a luz principal de lado, com sombra, e a contraluz por trás da orelha, a câmera orbitando. */
-function faceShot(material: () => MaterialFunction): Shot {
+/**
+ * A cena do rosto: a luz principal de frente e de lado, com sombra, a contraluz por trás da orelha e os painéis do
+ * estúdio (o reflexo nos olhos), a câmera orbitando; `close`: a câmera de perto, na altura dos olhos.
+ */
+function faceShot(skin: Values, iris: Values = {}, close = false): Shot {
     return {
         frames: GALLERY_FRAMES,
         warmup: WARMUP,
         build(app) {
-            const target: Vec3 = [0, 0.8, 0];
-            const arm: Vec3 = [0, 0.15, 4.6];
+            const target: Vec3 = close ? [0, 0.72, 0.3] : [0, 0.8, 0];
+            const arm: Vec3 = close ? [0, 0.05, 2.1] : [0, 0.15, 4.6];
             const eye = (a: number): Vec3 => {
                 const r = turn(arm, a);
                 return [target[0] + r[0], target[1] + r[1], target[2] + r[2]];
@@ -597,21 +713,21 @@ function faceShot(material: () => MaterialFunction): Shot {
                     fov: 24 * DEG,
                     aspect: W / H,
                     aspectMode: 'fixed',
-                    near: 0.5,
+                    near: 0.3,
                     far: 60,
                 }).add(view),
             );
-            studio(app);
-            const key = directional(app, FACE_KEY, 1.5, true);
-            directional(app, FACE_BACK, 1.4);
-            backdrop(app, -0.1, 0.12);
-            void face(app, material());
+            // Os painéis a um terço (a luz de preenchimento e o reflexo nos olhos): a principal modela o rosto.
+            studio(app, 0.33);
+            directional(app, FACE_KEY, 2.6, true);
+            directional(app, FACE_BACK, 1.8);
+            backdrop(app, -0.1, 0.07);
+            void face(app, faceSkin(skin), iris);
             return (i) => {
                 const t = i / (GALLERY_FRAMES - 1);
                 const p = eye(mix(-32, 32, t) * DEG);
                 view.data.position = [...p, 1];
                 view.data.rotation = Transform.lookRotation([...p], [...target]);
-                key.from(turn(FACE_KEY, mix(-25, 35, t) * DEG));
             };
         },
     };
@@ -683,9 +799,11 @@ export function materialStage(app: Application, name: MaterialName): MaterialSta
 
 export const MATERIAL_SHOTS: Record<string, Shot> = {
     // A pele no rosto da malha base do MakeHuman.
-    'pele-rosto': faceShot(() => Materials.skinDetailed({ scale: FACE_SCALE })),
-    'pele-rosto-escura': faceShot(() =>
-        Materials.skinDetailed({ scale: FACE_SCALE, melanin: 0.85, blood: 0.3, freckles: 0 }),
+    'pele-rosto': faceShot({}),
+    'pele-rosto-perto': faceShot({}, {}, true),
+    'pele-rosto-escura': faceShot(
+        { melanin: 0.85, blood: 0.3, freckles: 0 },
+        { iris_color: [0.16, 0.08, 0.03], iris_edge_color: [0.05, 0.025, 0.01] },
     ),
     // A vitrine: `vitrine-<família>`, todos os materiais.
     ...Object.fromEntries(
