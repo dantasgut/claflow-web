@@ -426,6 +426,13 @@ const EDIT_FRAMES = 195;
 const WARMUP = 240;
 /** A órbita da câmera num trecho: de −14° a +14°. */
 const orbit = (t: number): number => mix(-14, 14, t) * DEG;
+/**
+ * Quadros das cenas que ficam no app em laço (a vitrine, o rosto): 12 s, com a câmera indo e voltando — o app repete
+ * os quadros da cena, e uma órbita só de ida faria a câmera saltar de um extremo ao outro a cada volta.
+ */
+const LOOP_FRAMES = 720;
+/** A órbita em laço: o ângulo vai a ±`reach` graus e volta, contínuo na emenda do laço. */
+const sway = (i: number, reach: number): number => reach * DEG * Math.sin((2 * Math.PI * i) / LOOP_FRAMES);
 
 /** Duas fileiras de esferas no chão dos quadros só de esferas; devolve os centros. */
 function rows(
@@ -524,7 +531,7 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
  */
 function showcase(family: Showcase): Shot {
     return {
-        frames: GALLERY_FRAMES,
+        frames: LOOP_FRAMES,
         warmup: WARMUP,
         build(app) {
             const R = 0.6;
@@ -544,9 +551,8 @@ function showcase(family: Showcase): Shot {
                 text.label(name, anchor(c, R));
             }
             return (i) => {
-                const t = i / (GALLERY_FRAMES - 1);
-                lights(2 * Math.PI * t);
-                text.place(move(orbit(t)));
+                lights((2 * Math.PI * i) / LOOP_FRAMES);
+                text.place(move(sway(i, 14)));
             };
         },
     };
@@ -921,7 +927,7 @@ function faceShot(
     extra: { readonly bounce?: boolean; readonly soft?: boolean } = {},
 ): Shot {
     return {
-        frames: GALLERY_FRAMES,
+        frames: LOOP_FRAMES,
         warmup: WARMUP,
         build(app) {
             const at = FACE_EYES[1]!;
@@ -1000,8 +1006,7 @@ function faceShot(
             backdrop(app, -0.1, 0.07);
             void face(app, faceSkin(skin, look), iris, extra.soft === true);
             return (i) => {
-                const t = i / (GALLERY_FRAMES - 1);
-                const p = eye(mix(-32, 32, t) * DEG);
+                const p = eye(sway(i, 32));
                 view.data.position = [...p, 1];
                 view.data.rotation = Transform.lookRotation([...p], [...target]);
             };
