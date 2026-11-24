@@ -293,8 +293,10 @@ function ball(app: Application, piece: Piece): { material: Valued; displacement?
         );
         return { material: material as unknown as Valued };
     }
+    // O padrão maciço (a posição no objeto) tem uma escala só; o do uv, uma por eixo.
+    const solid = nodes.material[name].params.pattern_scale?.type === 'f32';
     const values: Values = {
-        pattern_scale: [...piece.displaced.pattern],
+        pattern_scale: solid ? piece.displaced.pattern[0] : [...piece.displaced.pattern],
         scale: piece.displaced.scale,
     };
     const surface =
@@ -448,7 +450,104 @@ const hsv = (h: number, s: number, v: number): number[] => {
     return [f(5), f(3), f(1)];
 };
 
+// ── A vitrine: todos os materiais da biblioteca, uma cena por família ────────────────────────────────────────────────
+/** Uma família da vitrine: a fileira de trás e a da frente. */
+interface Showcase {
+    readonly back: readonly MaterialName[];
+    readonly front: readonly MaterialName[];
+}
+
+/** As peças da vitrine com o relevo na geometria (as outras: a esfera pronta, o relevo na normal). */
+const SHOWCASE_RELIEF: Partial<Record<MaterialName, NonNullable<Piece['displaced']>>> = {
+    woodAshBrushed: { scale: 20, pattern: [1.5, 1.5] },
+    woodPineFine: { scale: 20, pattern: [1.2, 1.2] },
+    woodSolid: { scale: 20, pattern: [1, 1] },
+    bark: { scale: BARK_SCALE, pattern: [1.5, 1.5] },
+    barkPine: { scale: BARK_SCALE, pattern: [1.5, 1.5] },
+    barkBirch: { scale: RELIEF_SCALE, pattern: [1, 1] },
+};
+
+/** As famílias da vitrine: os 74 materiais da biblioteca, cada um numa cena. */
+const SHOWCASE: Readonly<Record<string, Showcase>> = {
+    metais: {
+        back: ['gold', 'copper', 'brass', 'chrome'],
+        front: ['aluminiumAnodized', 'metalPolished', 'metalBrushed', 'metalHammered'],
+    },
+    'metais-acabados': {
+        back: ['castIron', 'bronzePatina', 'metalOxidized', 'carbonFiber'],
+        front: ['carPaint', 'carPaintSilver', 'carPaintFlake'],
+    },
+    madeiras: {
+        back: ['woodPine', 'woodOak', 'woodWalnut', 'woodMahogany'],
+        front: ['woodOakVarnished', 'woodVarnishedGloss', 'woodVarnishedMatte', 'woodRaw'],
+    },
+    'madeiras-relevo': {
+        back: ['woodRough', 'woodAsh', 'woodFloorPlanks', 'woodFloorHerringbone'],
+        front: ['woodAshBrushed', 'woodPineFine', 'woodSolid'],
+    },
+    tecidos: {
+        back: ['cotton', 'wool', 'denim', 'sheerFabric'],
+        front: ['velvet', 'silk', 'leather', 'paper'],
+    },
+    pedra: {
+        back: ['concrete', 'granite', 'sandstone', 'plaster'],
+        front: ['brick', 'tile', 'terracotta', 'asphalt'],
+    },
+    'terra-plasticos': {
+        back: ['driedMud', 'sand', 'roofTile', 'roofSlate'],
+        front: ['rubber', 'ceramic', 'plasticMatte', 'plasticGloss'],
+    },
+    plantas: {
+        back: ['bark', 'barkPine', 'barkBirch'],
+        front: ['leaf', 'leafMatte', 'leafDry', 'cork', 'corkStopper'],
+    },
+    translucidos: {
+        back: ['glass', 'ice', 'porcelain', 'marble'],
+        front: ['skin', 'wax', 'jade', 'milk'],
+    },
+    organicos: { back: [], front: ['soap', 'ivory', 'motherOfPearl', 'snow'] },
+};
+
+/**
+ * A cena de uma família da vitrine: as esferas com o rótulo sob os painéis do estúdio, que dão a volta, mais uma luz
+ * direcional com sombra (a subsuperfície e o relevo respondem a ela), a câmera orbitando devagar.
+ */
+function showcase(family: Showcase): Shot {
+    return {
+        frames: GALLERY_FRAMES,
+        warmup: WARMUP,
+        build(app) {
+            const R = 0.6;
+            const move = galleryCamera(app, 1.17);
+            const lights = studio(app);
+            const key = directional(app, GALLERY_SUN, 1.5, true);
+            backdrop(app, -0.1, 0.12);
+            const text = overlay(app);
+            for (const [name, c] of rows(family.back, family.front, R, 1.45)) {
+                const displaced = SHOWCASE_RELIEF[name as MaterialName];
+                ball(app, {
+                    name: name as MaterialName,
+                    at: c,
+                    radius: R,
+                    ...(displaced !== undefined ? { displaced, front: true } : {}),
+                });
+                text.label(name, anchor(c, R));
+            }
+            return (i) => {
+                const t = i / (GALLERY_FRAMES - 1);
+                lights(2 * Math.PI * t);
+                key.from(turn(GALLERY_SUN, mix(-40, 40, t) * DEG));
+                text.place(move(orbit(t)));
+            };
+        },
+    };
+}
+
 export const MATERIAL_SHOTS: Record<string, Shot> = {
+    // A vitrine: `vitrine-<família>`, todos os materiais.
+    ...Object.fromEntries(
+        Object.entries(SHOWCASE).map(([name, family]) => [`vitrine-${name}`, showcase(family)]),
+    ),
     // Os metais sob os painéis do estúdio da galeria, que dão a volta: os realces correm pelas esferas.
     'materiais-metais': {
         frames: GALLERY_FRAMES,
