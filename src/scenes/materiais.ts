@@ -963,10 +963,9 @@ function faceShot(
                 // A luz dura de lado e a contraluz atrás da orelha, quase sem preenchimento: o terminador cruza o
                 // rosto e a luz atravessa a orelha — onde o espalhamento sob a pele aparece.
                 studio(app, 0.08);
-                // O motor atende uma luz com sombra só (a primeira): aqui é a contraluz, porque é do mapa de sombra dela
-                // que sai a espessura que a luz atravessa na orelha. A principal fica sem sombra.
+                // As duas com sombra (spec 013): a principal marca o terminador e a contraluz atravessa a orelha.
+                directional(app, [0.9, 0.3, 0.45], 2.6, true);
                 directional(app, [-0.5, 0.3, -0.8], 1.3, true);
-                directional(app, [0.9, 0.3, 0.45], 2.6);
             } else {
                 // As luzes de área não projetam sombra: sob elas o globo ocular, recuado sob a pálpebra e a
                 // sobrancelha, recebe a luz inteira e sai branco. Ficam fracas (o reflexo na córnea); quem ilumina
@@ -980,13 +979,11 @@ function faceShot(
                         ? { quality: 'high', probeSpacing: 0.25, center: [0, 0.7, 0.2], screenGather: true }
                         : {},
                 );
-                // O preenchimento sem sombra: com ela, a luz dele atravessando a pele (a orelha, a borda do rosto) liga
-                // e desliga de um quadro para o outro conforme as páginas de sombra finas existem ou não — pisca.
-                directional(app, [0.7, 0.25, 0.65], 0.3);
+                // O preenchimento com sombra (spec 013: cada luz com a sua).
+                directional(app, [0.7, 0.25, 0.65], 0.3, true);
                 directional(app, FACE_KEY, 1.9, true);
-                // A contraluz sem sombra: com ela a luz atravessaria as partes finas (a orelha), mas a espessura lida do mapa
-                // de sombra sai zero em manchas na borda do rosto (defeito em aberto; ver `pele-rosto-luz-dura`).
-                directional(app, FACE_BACK, 0.8);
+                // A contraluz com sombra: a luz dela atravessa as partes finas (a orelha).
+                directional(app, FACE_BACK, 0.8, true);
                 // A caixa de luz do retrato, à frente e acima: a luz macia no rosto e o reflexo dela na córnea.
                 const box: Vec3 = [-1.5, 2.1, 3.4];
                 const aim = unit3(sub3([0, 0.75, 0.3], box));
