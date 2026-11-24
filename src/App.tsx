@@ -2,20 +2,39 @@ import { useEffect, useRef, useState } from 'react';
 import { Application, createScene } from 'clayflow/web';
 import { H, SHOTS, W } from './scenes/catalog';
 import { FpsCounter, ScenePanel } from './ScenePanel';
+import type { MaterialName } from 'clayflow/web';
+import { MaterialGallery } from './MaterialGallery';
+import { MATERIAL_FAMILIES } from './scenes/materiais';
+import { TimeControls } from './TimeControls';
+import { TimeNavigator } from './TimeNavigator';
 
 const NAMES = Object.keys(SHOTS);
+
+/** O material pedido na URL (`?material=<nome>`; nome desconhecido: o primeiro), ou `undefined` sem o parâmetro. */
+function galleryMaterial(): MaterialName | undefined {
+    const name = new URLSearchParams(location.search).get('material');
+    if (name === null) return undefined;
+    const all = MATERIAL_FAMILIES.flatMap(([, names]) => names);
+    return all.find((n) => n === name) ?? all[0];
+}
 
 /**
  * O catálogo de cenas do clayflow-web (spec 038): `?scene=<nome>` abre a cena no canvas pelo `clayflow/web`, com o laço
  * do navegador e o movimento da cena por quadro (o mesmo da gravação); sem cena, a lista.
  */
 export default function App() {
+    const material = galleryMaterial();
+    if (material !== undefined) return <MaterialGallery name={material} />;
     const scene = new URLSearchParams(location.search).get('scene');
     if (scene === null || !(scene in SHOTS)) {
         return (
             <main style={{ padding: 24 }}>
                 <h1>clayflow-web</h1>
                 <p>As cenas do motor clayflow.</p>
+                <p style={{ margin: '12px 0' }}>
+                    <a href="?material=gold">Galeria de materiais</a> — um material por vez, com os nós e os
+                    parâmetros.
+                </p>
                 <ul>
                     {NAMES.map((n) => (
                         <li key={n}>
@@ -29,24 +48,28 @@ export default function App() {
     return <ScenePlayer name={scene} />;
 }
 
-/** A cena no canvas, quadro a quadro pelo laço do navegador; Espaço pausa. A taxa de quadros e o painel por cima. */
+/**
+ * A cena no canvas, quadro a quadro pelo laço do navegador, com a navegação no tempo (`TimeNavigator`: pausa, quadro a
+ * quadro, velocidade, câmera seguindo o tempo ou livre). A taxa de quadros, o painel e a barra do tempo por cima.
+ */
 function ScenePlayer({ name }: { readonly name: string }) {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const hostRef = useRef<HTMLDivElement>(null);
     const [error, setError] = useState<string | null>(null);
     const [running, setRunning] = useState<Application | null>(null);
+    const [nav, setNav] = useState<TimeNavigator | null>(null);
     useEffect(() => {
-        const canvas = canvasRef.current;
+        const host = hostRef.current;
         const shot = SHOTS[name];
-        if (canvas === null || shot === undefined) return;
+        if (host === null || shot === undefined) return;
+        // Um canvas por motor: o motor descartado (o React monta o efeito duas vezes em desenvolvimento, e a criação é
+        // assíncrona) desconfigura o contexto do canvas dele, nunca o do motor que ficou.
+        const canvas = document.createElement('canvas');
+        canvas.style.width = '100vw';
+        canvas.style.height = 'auto';
+        canvas.style.display = 'block';
+        host.appendChild(canvas);
         let app: Application | undefined;
         let disposed = false;
-        let paused = false;
-        const onKey = (e: KeyboardEvent) => {
-            if (e.code !== 'Space' || app === undefined) return;
-            paused = !paused;
-            if (paused) app.stop();
-            else app.start();
-        };
         void (async () => {
             try {
                 canvas.width = W;
@@ -57,15 +80,10 @@ function ScenePlayer({ name }: { readonly name: string }) {
                     return;
                 }
                 app = created;
-                const update = shot.build(created);
-                let frame = 0;
-                update(frame);
-                created.events.on('frameTick', () => {
-                    update(++frame % shot.frames);
-                });
-                window.addEventListener('keydown', onKey);
+                const navigator = new TimeNavigator(created, shot.build(created), shot.frames);
                 created.start();
                 setRunning(created);
+                setNav(navigator);
             } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
             }
@@ -73,15 +91,17 @@ function ScenePlayer({ name }: { readonly name: string }) {
         return () => {
             disposed = true;
             setRunning(null);
-            window.removeEventListener('keydown', onKey);
+            setNav(null);
             app?.dispose();
+            canvas.remove();
         };
     }, [name]);
     return (
         <div>
-            <canvas ref={canvasRef} style={{ width: '100vw', height: 'auto', display: 'block' }} />
+            <div ref={hostRef} />
             {running !== null && <FpsCounter app={running} />}
             {running !== null && <ScenePanel app={running} />}
+            {nav !== null && <TimeControls nav={nav} />}
             {error !== null && <pre style={{ color: '#f66' }}>{error}</pre>}
         </div>
     );

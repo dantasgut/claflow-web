@@ -55,7 +55,7 @@ async function main(): Promise<void> {
         canvas,
         scene: createScene(),
         autoResize: false,
-        profiling: 'frame',
+        profiling: q.has('passes') ? true : 'frame',
         ...(AA !== null ? { antialias: AA as clayflow.AntialiasingMode } : {}),
         canvasOptions: {
             capture: true,
@@ -66,11 +66,22 @@ async function main(): Promise<void> {
     app.events.on('engineError', (e) => errors.push(`${e.stage}: ${e.message}`));
     // Tempo de GPU por quadro (profiling do quadro): quantos quadros por segundo o motor gera nesta cena.
     const gpuMs: number[] = [];
-    app.events.on('gpuFrameTimed', (e) => gpuMs.push(e.totalMs));
+    // Por passe (spec 041): a mediana de cada passe nos quadros gravados, os mais caros no fim.
+    const passMs: Record<string, number>[] = [];
+    app.events.on('gpuFrameTimed', (e) => {
+        gpuMs.push(e.totalMs);
+        passMs.push({ ...e.passesMs });
+    });
     if (PROFILE !== null) app.defaults.renderer.profile = PROFILE as clayflow.RenderProfile;
     const update = shot.build(app);
     update(0);
     await app.whenReady({ timeoutMs: 120_000 });
+    // O aquecimento: quadros parados no primeiro, sem gravar (cada um espera o quadro apresentado, sem empilhar).
+    for (let i = 0; i < (shot.warmup ?? 0); i++) {
+        update(0);
+        app.step(1 / 60);
+        await app.core.readCanvas();
+    }
     for (let i = 0; i < frames; i++) {
         update(i);
         app.step(1 / 60);
@@ -84,6 +95,15 @@ async function main(): Promise<void> {
     app.dispose();
     canvas.remove();
     log(`${name}: ${frames} quadros ${W}×${H} lidos da GPU (${BITS} bits)`);
+    if (passMs.length > 0) {
+        const keys = new Set(passMs.flatMap((x) => Object.keys(x)));
+        const med = [...keys].map((k): [string, number] => {
+            const v = passMs.map((x) => x[k] ?? 0).sort((a, b) => a - b);
+            return [k, v[Math.floor(v.length / 2)]!];
+        });
+        med.sort((a, b) => b[1] - a[1]);
+        log(`${name}: passes (mediana, ms) ${med.slice(0, 12).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(' | ')}`);
+    }
     if (gpuMs.length > 0) {
         const s = [...gpuMs].sort((a, b) => a - b);
         const at = (f: number): number => s[Math.min(s.length - 1, Math.floor(f * s.length))]!;

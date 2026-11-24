@@ -249,7 +249,8 @@ export function insertCloth(app: Application): void {
             edges: { a, b },
             surface: { triangles, uvs },
         })
-            .add(new StandardMaterial({ albedo: [0.85, 0.1, 0.08, 1], roughness: 1 }))
+            // O tecido é de dois lados (spec 034, T061a): a face de trás desenhada e com sombra.
+            .add(new StandardMaterial({ albedo: [0.85, 0.1, 0.08, 1], roughness: 1, doubleSided: true }))
             .add(new Transform()),
     );
 }

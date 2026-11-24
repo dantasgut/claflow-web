@@ -5,7 +5,8 @@
 // agitada vista de cima, fundo de areia), natureza (vale com relevo, céu, luz global e o lago), cornell (caixa de Cornell
 // com a luz global), dia (cômodo com janela, o sol andando), nevoa (o mesmo cômodo com névoa), pano (tecido XPBD), sprites
 // (partículas e os vértices de uma esfera como sprites), ondulacao (lâmina de água com ondulações e a esfera de vidro
-// meio mergulhada) e as de pendência da 034 (pend*). O tamanho vem da URL (`?w=`, `?h=`; padrão 1280 × 720).
+// meio mergulhada), as de pendência da 034 (pend*) e as das nuvens da 041 (nuvens, pordosol, solposto, raios, raios-vaos, raios-chao, solpostolento, solpostooposto, voo, sombrasnuvens,
+// tempestade). O tamanho vem da URL (`?w=`, `?h=`; padrão 1280 × 720).
 import * as clayflow from 'clayflow/web';
 import {
     Application,
@@ -27,14 +28,20 @@ import { closureFn, materialGraph } from './support/materialScenes';
 import { CAUSTIC_SPHERE, CAUSTIC_SUN } from './support/causticScenes';
 import { WATER_SPACING, waterLook, waterScene } from './support/waterScene';
 import { loadHdr } from './support/hdr';
+import { MATERIAL_SHOTS } from './materiais';
+import { H, W } from './size';
 
-/** A escala da panorâmica HDR na da cena (o sol a 1,2): o céu dela fica no brilho do hemisfério de antes. */
-const ENVIRONMENT_INTENSITY = 0.6;
+/**
+ * A luz de um dia de sol na `agua`: o sol direto 6 a 8 vezes a luz do céu no chão (medido com a panorâmica a 0,6 e o
+ * sol a 1,2: o céu dava ~80 % da luz do chão — luz de dia encoberto, em que não há cáustica nem sombra). O céu da
+ * panorâmica a 1/8 e o sol 4 vezes: o brilho do chão fica no de antes, e a luz que a água concentra aparece.
+ */
+const ENVIRONMENT_INTENSITY = 0.075;
+const SUN_INTENSITY = 4.8;
 
 
 const q = new URLSearchParams(location.search);
-export const W = Number(q.get('w') ?? 1280);
-export const H = Number(q.get('h') ?? 720);
+export { H, W } from './size';
 /** `?girar` (0,3 rad/s) ou `?girar=<rad/s>`: a câmera orbital gira sozinha enquanto a animação roda. */
 const SPIN = q.has('girar') ? Number(q.get('girar') || 0.3) : 0;
 
@@ -42,6 +49,11 @@ const SPIN = q.has('girar') ? Number(q.get('girar') || 0.3) : 0;
 /** Uma cena: quadros padrão e a montagem, que devolve o movimento por quadro. */
 export interface Shot {
     readonly frames: number;
+    /**
+     * Quadros simulados antes da gravação, parados no primeiro (o histórico que converge com o tempo: o cache de
+     * espalhamento das nuvens soma um caminho por sonda a cada 8 quadros).
+     */
+    readonly warmup?: number;
     build(app: Application): (i: number) => void;
 }
 
@@ -194,7 +206,734 @@ function rippledWater(app: Application, size: Vec3, center: Vec3): void {
     );
 }
 
+/**
+ * O fotômetro de luz incidente (C = 250, padrão de ponto médio de 18 %) pela elevação do sol: a exposição (EV,
+ * multiplicador 2^EV) que levaria a iluminância horizontal no chão (o sol pela transmitância e o céu pela integral da
+ * radiância, na atmosfera de referência f64 do motor, `scene/reference/atmosphere.ts`; 100 000 lx no topo) ao ponto médio,
+ * `0,526 − EV100`. Ao meio dia, −14,47 (a regra do "sunny 16", EV100 15). A câmera segue só uma fração dele
+ * (`METER_FOLLOW`).
+ */
+const METER: readonly (readonly [number, number])[] = [
+    [-4, -3.69],
+    [-3, -5.05],
+    [-2, -6.18],
+    [-1, -7.1],
+    [0, -7.81],
+    [1, -8.5],
+    [2, -9.12],
+    [4, -10.1],
+    [6, -10.81],
+    [8, -11.33],
+    [12, -12.07],
+    [20, -12.95],
+    [30, -13.59],
+    [40, -13.99],
+    [60, -14.47],
+    [90, -14.7],
+];
+
+/**
+ * Derivadas de Fritsch–Carlson nos nós da tabela (a curva por Hermite cúbica é monótona e de derivada contínua: a
+ * interpolação linear tinha um bico em cada nó).
+ */
+const METER_SLOPES: readonly number[] = (() => {
+    const n = METER.length;
+    const h = METER.slice(1).map(([e], k) => e - METER[k]![0]);
+    const d = METER.slice(1).map(([, x], k) => (x - METER[k]![1]) / h[k]!);
+    const m = METER.map((_, k) => {
+        if (k === 0) return d[0]!;
+        if (k === n - 1) return d[n - 2]!;
+        const a = d[k - 1]!;
+        const b = d[k]!;
+        if (a * b <= 0) return 0;
+        const w1 = 2 * h[k]! + h[k - 1]!;
+        const w2 = h[k]! + 2 * h[k - 1]!;
+        return (w1 + w2) / (w1 / a + w2 / b);
+    });
+    return m;
+})();
+
+/** O fotômetro (EV) e a derivada dele (EV/°) na elevação `e` (−4° a 90°). */
+function meterAt(e: number): readonly [number, number] {
+    let k = 0;
+    while (k < METER.length - 2 && METER[k + 1]![0] < e) k++;
+    const [e0, x0] = METER[k]!;
+    const [e1, x1] = METER[k + 1]!;
+    const h = e1 - e0;
+    const t = (e - e0) / h;
+    const m0 = METER_SLOPES[k]! * h;
+    const m1 = METER_SLOPES[k + 1]! * h;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const value =
+        (2 * t3 - 3 * t2 + 1) * x0 + (t3 - 2 * t2 + t) * m0 + (-2 * t3 + 3 * t2) * x1 + (t3 - t2) * m1;
+    const slope =
+        ((6 * t2 - 6 * t) * x0 + (3 * t2 - 4 * t + 1) * m0 + (-6 * t2 + 6 * t) * x1 + (3 * t2 - 2 * t) * m1) / h;
+    return [value, slope];
+}
+
+/**
+ * A fração da mudança do fotômetro que a câmera acompanha (spec 041): a metade, em todas as elevações — a regra do
+ * "sunny 16" seguida em parte, como no lapso de tempo do dia para a noite (a exposição corrigida aos poucos, sem anular a
+ * queda da luz). Do meio dia ao sol a 20°, a imagem escurece 0,9 EV; a 5°, 2,1 EV; no horizonte, 3,4 EV; a −4°, 5,5 EV —
+ * o crepúsculo escurece como no olho e na câmera; o fotômetro inteiro levava o chão ao mesmo brilho até 11° e escondia a
+ * queda.
+ */
+const METER_FOLLOW = 0.5;
+
+/** A exposição (EV, multiplicador 2^EV) com o sol a `elevation` graus: a do meio dia mais a fração da mudança do fotômetro. */
+function meterExposure(elevation: number): number {
+    const e = Math.min(90, Math.max(-4, elevation));
+    const noon = meterAt(90)[0];
+    return noon + METER_FOLLOW * (meterAt(e)[0] - noon);
+}
+
+/**
+ * Extinção das nuvens das cenas (1/m na densidade 1): a de um cúmulo com ~0,4 g/m³ de água líquida e gotículas de 20 µm
+ * (`3·LWC/(2·ρ·r)` ≈ 0,06/m na densidade média da forma, ~0,7). O padrão da camada (0,04) é o de nuvens mais finas.
+ */
+const CUMULUS_DENSITY = 0.08;
+
+/**
+ * A turbidez das cenas do pôr do sol (spec 041): 8 × os aerossóis de Hillaire — profundidade ótica vertical ~0,04 a 550 nm
+ * e visibilidade de ~80 km, o ar limpo de um fim de tarde no campo (a média continental fica em 0,1–0,2). Os aerossóis
+ * espalham para a frente: a auréola do sol, o laranja do horizonte e os feixes de luz e sombra entre as nuvens.
+ */
+const SUNSET_TURBIDITY = 8;
+
+/**
+ * O céu físico e a camada de nuvens (spec 041) com o sol a `elevation` graus e a câmera em `eye` olhando `target`. A
+ * turbidez multiplica os aerossóis do `Sky` (1: os de Hillaire, profundidade ótica vertical 0,005 a 550 nm — ar de
+ * montanha, visibilidade de ~200 km).
+ */
+function cloudSky(
+    app: Application,
+    elevation: number,
+    values: clayflow.CloudLayerValues,
+    eye: Vec3,
+    target: Vec3,
+    turbidity = 1,
+    haze?: { readonly extinction: number; readonly scaleHeight?: number },
+): { sun: clayflow.DirectionalLight; move: (p: Vec3, t: Vec3) => void; setSun: (elevation: number) => void } {
+    const direction = (el: number): [number, number, number, number] => {
+        const e = (el * Math.PI) / 180;
+        return [-Math.cos(e) * 0.8, -Math.sin(e), -Math.cos(e) * 0.6, 0];
+    };
+    const sun = new clayflow.DirectionalLight({
+        direction: direction(elevation),
+        intensity: 100_000,
+        castShadow: true,
+    });
+    app.world.insert(sun);
+    app.world.insert(new clayflow.Sky({ sun, turbidity, ...(haze === undefined ? {} : { haze }) }));
+    app.world.insert(new clayflow.CloudLayer({ density: CUMULUS_DENSITY, ...values }));
+    const view = new Transform({ position: [...eye, 1], rotation: Transform.lookRotation(eye, target) });
+    app.world.insert(
+        new clayflow.Camera({ fov: Math.PI / 3, aspect: W / H, aspectMode: 'fixed', near: 0.5, far: 200_000 }).add(view),
+    );
+    app.defaults.renderer.output.data.exposure = meterExposure(elevation);
+    // A curva de tom que guarda a matiz e a saturação até perto do branco (Khronos PBR Neutral, spec 041): o AgX leva os
+    // realces saturados ao branco — o horizonte do lado do sol a 1° (2100 K na referência f64 da atmosfera, x 0,50 y 0,40)
+    // saía a ~4200 K na tela, e as nuvens douradas do sol baixo, quase brancas.
+    app.defaults.renderer.output.data.operator = 'neutral';
+    // O espalhamento da lente (spec 041): 4 % da luz em θ⁻³, sem limiar — o clarão em volta do sol com a energia inteira
+    // do disco.
+    app.defaults.post.addEffect(new clayflow.Bloom());
+    return {
+        sun,
+        move: (p, t) => {
+            view.data.position = [...p, 1];
+            view.data.rotation = Transform.lookRotation(p, t);
+        },
+        setSun: (el) => {
+            sun.data.direction = direction(el);
+            app.defaults.renderer.output.data.exposure = meterExposure(el);
+        },
+    };
+}
+
+/**
+ * O tempo acelerado da `tempestade` (spec 041, R19): a escala do relógio (1 quadro de 1/60 s = 2 s: 4 h em 120 s) e o
+ * passo fixo igual a um quadro (o tempo simulado anda um passo por quadro, sem o teto de passos cortar o tempo). A
+ * reconstrução temporal das nuvens junta ~7 amostras por pixel (a média exponencial de peso 0,25, cada pixel marchado a
+ * cada 4 quadros): com a nuvem mudando a cada quadro ela não acumula, e as bordas ralas ficam com o ruído de uma amostra
+ * (medido na borda de baixo de um cúmulo, o passa-alta 5 × 5: 0,96 a 4 s por quadro, 0,77 a 2 s, 0,64 a 1 s; a 1/60 s,
+ * liso em 60 quadros). A 18 s por quadro (a primeira gravação) as nuvens andavam 100–250 m por quadro.
+ */
+const STORM_TIME = 120;
+
+/**
+ * O campo de pressão da `tempestade` (WGSL do ponto `cloud_pressure`, no referencial que anda com o vento de condução):
+ * uma baixa de mesoescala (σ = 12 km: a subida até ~17 km do centro, o tamanho de um sistema convectivo) que se aprofunda
+ * de 0 a 1,5 hPa entre 1 h e 4 h de tempo simulado. O vento de condução (3,7 m/s de oeste, `STORM_WIND`) traz o
+ * centro de 65 km (40 min, o início da gravação) a 12 km (4 h 40, o fim: a câmera debaixo da bigorna) da câmera, na
+ * direção em que ela olha (a leste, `STORM_VIEW`); o centro no referencial é o do mundo aos 40 min menos o vento × 40
+ * min.
+ */
+const STORM_PRESSURE = `fn pressure_fn(xz: vec2f, time: f32, data: PressureFnParams) -> f32 {
+    let d = xz - vec2f(71912.0, -16759.0);
+    return -150.0 * smoothstep(3600.0, 14400.0, time) * exp(-dot(d, d) / 2.88e8);
+}`;
+
+/**
+ * A direção (x, z) em que a câmera da `tempestade` olha: 50° à esquerda do azimute do sol (fora do quadro, atrás e à
+ * direita da torre: o lado dela virado para a câmera fica na sombra, e a bigorna que chega fica entre o sol e o chão).
+ */
+const STORM_VIEW: [number, number] = [0.974, -0.227];
+/** O vento de condução da `tempestade` (m/s): 3,7 m/s vindo da direção da torre, que se aproxima. */
+const STORM_WIND: [number, number] = [-3.584, 0.835];
+
+/** Lago escavado no terreno das nuvens: o centro (x, z), a meia largura da caixa de água (m) e a cota da borda (m). */
+interface TerrainLake {
+    readonly center: readonly [number, number];
+    readonly half: number;
+    readonly rim: number;
+}
+
+/**
+ * O terreno das cenas das nuvens (spec 041): colinas até o horizonte pela função de superfície (ruído de valor em cinco
+ * oitavas, de 1,6 km a ~100 m; colinas de 400–900 m com ±22 m e encostas de 15–25 %, ondulações de 120–250 m e lombas de
+ * 15–60 m), planas na origem (a câmera a 2 m do chão) e mais altas com a distância — ±2 m no pasto perto, até ~60 m a
+ * 4–6 km, menos de 1° acima do horizonte: o relevo não tapa o céu. Com o sol baixo, as encostas viradas para ele acendem
+ * e as do outro lado ficam na sombra (a das colinas, pelo mapa de sombra). Malha adaptativa na GPU
+ * (o domínio esticado: segmentos de ~0,5 m perto da origem e ~20 m na borda). Coberto de gramado pelo material por pixel
+ * (o mesmo caminho da `natureza`): manchas de grama verde e seca de ~25 m e de ~250 m, touceiras de ~40 cm e o grão de
+ * ~4 cm, cada oitava apagada quando cai abaixo de 3 pixels (a pegada `s.footprint`), e terra onde a encosta é íngreme. A
+ * sombra das nuvens chega por `light_transmission`, como em toda superfície. Com `lake`, uma bacia redonda dentro
+ * da caixa de água (o terreno em volta acima da água: as paredes e os cantos da caixa enterrados).
+ */
+function cloudTerrain(app: Application, lake?: TerrainLake): void {
+    const HALF = 6000;
+    const lakeCode =
+        lake === undefined
+            ? ''
+            : `    let ld = length(p - vec2f(${lake.center[0].toFixed(1)}, ${lake.center[1].toFixed(1)}));
+    // Em volta do lago (até além dos cantos da caixa) o chão fica acima da borda da água; dentro, a bacia redonda.
+    h = mix(max(h, ${lake.rim.toFixed(2)}), h, smoothstep(${(lake.half * 1.5).toFixed(1)}, ${(lake.half * 2).toFixed(1)}, ld));
+    h = mix(-1.6, h, smoothstep(${(lake.half - 10).toFixed(1)}, ${(lake.half - 3.5).toFixed(1)}, ld));
+`;
+    app.world.insert(
+        new clayflow.ParametricSurface({
+            domain: [-1, 1, -1, 1],
+            adaptive: { patches: [48, 48], maxLevel: 5, screen: 0.01, tolerance: 0.05, refreshDistance: 1 },
+        })
+            .add(
+                new clayflow.SurfaceFunction({
+                    code: `fn tr_hash(c: vec2f) -> f32 {
+    var p3 = fract(vec3f(c.x, c.y, c.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+fn tr_noise(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    let a = mix(tr_hash(i), tr_hash(i + vec2f(1.0, 0.0)), u.x);
+    let b = mix(tr_hash(i + vec2f(0.0, 1.0)), tr_hash(i + vec2f(1.0, 1.0)), u.x);
+    return mix(a, b, u.y) * 2.0 - 1.0;
+}
+fn surface_fn(u: f32, v: f32, time: f32, data: SurfaceFnParams) -> vec3f {
+    // O domínio [−1, 1]² esticado para o mundo (x = v, z = u, a normal da malha para cima): x = L·(c·v + (1 − c)·v³) —
+    // a grade densa perto da origem (segmentos de ~0,5 m: a margem do lago e as lombas perto da câmera) e larga longe
+    // (~20 m na borda, a 6 km), com a mesma quantidade de vértices.
+    let c = 0.06;
+    let p = ${HALF}.0 * vec2f(c * v + (1.0 - c) * v * v * v, c * u + (1.0 - c) * u * u * u);
+    let r = length(p);
+    var n = 0.0;
+    var amp = 0.55;
+    var f = 1.0 / 1600.0;
+    for (var k = 0u; k < 5u; k++) {
+        n += amp * tr_noise(p * f + vec2f(f32(k) * 13.7, f32(k) * 5.3));
+        amp *= 0.48;
+        f *= 2.17;
+    }
+    // Colinas de 400–900 m (±30 m: encostas de 15–25 %, que o sol baixo ilumina de um lado e deixa na sombra do
+    // outro) e ondulações de 120–250 m (±4 m), três oitavas cada.
+    var hill = 0.0;
+    var ha = 1.0;
+    var hf = 1.0 / 700.0;
+    for (var k = 0u; k < 3u; k++) {
+        hill += ha * tr_noise(p * hf + vec2f(f32(k) * 3.3 - 70.0, f32(k) * 9.1 + 25.0));
+        ha *= 0.5;
+        hf *= 2.3;
+    }
+    var swell = 0.0;
+    var sa = 1.0;
+    var sf = 1.0 / 180.0;
+    for (var k = 0u; k < 3u; k++) {
+        swell += sa * tr_noise(p * sf + vec2f(f32(k) * 5.7 + 13.0, f32(k) * 2.9 - 31.0));
+        sa *= 0.5;
+        sf *= 2.2;
+    }
+    // Lombas de 15–60 m de comprimento (±1,5 m), o que dá o chão irregular perto da câmera.
+    var bump = 0.0;
+    var ba = 1.5;
+    var bf = 1.0 / 60.0;
+    for (var k = 0u; k < 3u; k++) {
+        bump += ba * tr_noise(p * bf + vec2f(f32(k) * 7.9 + 40.0, f32(k) * 3.1 - 11.0));
+        ba *= 0.55;
+        bf *= 2.1;
+    }
+    // Pasto ondulado perto (±2 m), as colinas a partir de ~100 m e as maiores longe (até ~60 m acima do plano a 4–6 km:
+    // menos de 1° acima do horizonte, o relevo não tapa o céu); plano em volta da origem (a câmera a 2 m do chão).
+    let far = smoothstep(1500.0, 4500.0, r);
+    let edge = smoothstep(${HALF - 1500}.0, ${HALF}.0, max(abs(p.x), abs(p.y)));
+    let near = smoothstep(6.0, 40.0, r);
+    let height = mix(4.0, 110.0, smoothstep(250.0, 4500.0, r)) * smoothstep(10.0, 90.0, r);
+    // Um vale largo no rumo do poente e do nascente (o azimute do sol das cenas, (0,8; 0,6), e o oposto): as colinas a um
+    // quarto ali, o horizonte do sol baixo e o do lado oposto (a sombra da Terra) ficam abertos.
+    let toward = abs(dot(p, vec2f(0.8, 0.6))) / max(r, 1.0);
+    let across = abs(p.x * 0.6 - p.y * 0.8) / max(r, 1.0);
+    let opening = mix(1.0, mix(0.25, 1.0, smoothstep(0.08, 0.35, across)), smoothstep(0.0, 0.5, toward));
+    let rolling = smoothstep(60.0, 400.0, r) * (1.0 - 0.5 * far) * opening;
+    var h = height * (n + 0.4 * far) + rolling * (22.0 * hill + 4.0 * swell) + near * bump + 25.0 * edge;
+${lakeCode}    return vec3f(p.x, h, p.y);
+}`,
+                }),
+            )
+            .add(new clayflow.StandardMaterial({ albedo: [0.2, 0.3, 0.1, 1], roughness: 0.95 }))
+            .add(
+                new clayflow.MaterialFunction({
+                    code: `fn gr_hash(c: vec2f) -> f32 {
+    var p3 = fract(vec3f(c.x, c.y, c.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+fn gr_noise(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(gr_hash(i), gr_hash(i + vec2f(1.0, 0.0)), u.x);
+    let b = mix(gr_hash(i + vec2f(0.0, 1.0)), gr_hash(i + vec2f(1.0, 1.0)), u.x);
+    return mix(a, b, u.y) * 2.0 - 1.0;
+}
+fn gr_fbm(p: vec2f, scale: f32, footprint: f32) -> f32 {
+    var sum = 0.0;
+    var norm = 0.0;
+    var amp = 0.5;
+    var f = scale;
+    for (var k = 0u; k < 5u; k++) {
+        let w = select(1.0, clamp((1.0 / (f * footprint) - 1.5) / 1.5, 0.0, 1.0), footprint > 0.0);
+        sum += amp * w * gr_noise(p * f + vec2f(f32(k) * 17.3, f32(k) * 7.1));
+        norm += amp;
+        amp *= 0.5;
+        f *= 2.03;
+    }
+    return sum / norm;
+}
+fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) -> Closure {
+    let xz = s.world_position.xz;
+    let slope = 1.0 - clamp(s.normal.y, 0.0, 1.0);
+    // Manchas de ~250 m e de ~25 m (verde e seca), touceiras de ~40 cm, o grão de ~4 cm.
+    let field = gr_fbm(xz, 0.004, s.footprint);
+    let spot = gr_fbm(xz + vec2f(31.0, 5.0), 0.04, s.footprint);
+    let clump = gr_fbm(xz + vec2f(3.0, 47.0), 2.5, s.footprint);
+    let grain = gr_fbm(xz + vec2f(71.0, 13.0), 25.0, s.footprint);
+    let lush = vec3f(0.06, 0.1, 0.035);
+    let green = vec3f(0.1, 0.14, 0.05);
+    let dry = vec3f(0.24, 0.22, 0.11);
+    var grass = mix(lush, green, smoothstep(-0.4, 0.4, field));
+    grass = mix(grass, dry, smoothstep(0.15, 0.6, spot + 0.3 * field));
+    grass *= 1.0 + 0.35 * clump + 0.45 * grain;
+    let soil = vec3f(0.3, 0.24, 0.16) * (1.0 + 0.3 * clump + 0.3 * grain);
+    let soil_t = smoothstep(0.3, 0.45, slope + 0.08 * clump);
+    let c = clamp(mix(grass, soil, soil_t), vec3f(0.0), vec3f(1.0));
+    // A folha de grama tem cutícula de cera (dielétrico, n ≈ 1,45) sobre o tecido difuso: olhando rente ao chão contra o
+    // sol, o Fresnel da cera reflete a luz dourada do sol baixo; o dossel de folhas finas dá o brilho de fibra (sheen).
+    // A terra exposta, quase sem cera.
+    let base = closure_add(closure_diffuse(c, 0.0), closure_scale(closure_sheen(clamp(c * 3.0, vec3f(0.0), vec3f(1.0)), 0.6), 0.4));
+    let wax = closure_dielectric(1.45, vec3f(1.0), 0.8, 0.0, vec3f(1.0, 0.0, 0.0));
+    return closure_layer(wax, base, vec3f(1.0), mix(0.3, 0.1, soil_t));
+}`,
+                }),
+            )
+            .add(new Transform()),
+    );
+}
+
 export const SHOTS: Record<string, Shot> = {
+    // A biblioteca de materiais (spec 011, T112): a galeria girando e o material editado (`materiais.ts`).
+    ...MATERIAL_SHOTS,
+    nuvens: {
+        frames: 480,
+        warmup: 600,
+        build(app) {
+            // Meio dia (spec 041): cúmulos com vento, a câmera no chão girando do horizonte para o alto.
+            cloudTerrain(app);
+            const { move } = cloudSky(app, 60, { coverage: 0.5, type: 0.5, wind: [12, 3] }, [0, 2, 0], [1000, 300, 0]);
+            return (i) => {
+                const a = (i / 479) * 0.9;
+                move([0, 2, 0], [1000 * Math.cos(a), 250 + 500 * (i / 479), 1000 * Math.sin(a)]);
+            };
+        },
+    },
+    pordosol: {
+        frames: 480,
+        warmup: 600,
+        build(app) {
+            // O sol descendo de 12° a 1° atrás das nuvens (spec 041), a câmera olhando para ele (o azimute do sol é
+            // (0,8; 0,6): de costas para o sol, o céu baixo não fica laranja); a exposição pelo fotômetro.
+            cloudTerrain(app);
+            const { setSun } = cloudSky(
+                app,
+                12,
+                { coverage: 0.45, type: 0.55, wind: [8, 0] },
+                [0, 2, 0],
+                [800, 130, 600],
+                SUNSET_TURBIDITY,
+            );
+            return (i) => setSun(12 - 11 * (i / 479));
+        },
+    },
+    solposto: {
+        frames: 1200,
+        warmup: 600,
+        build(app) {
+            // Do meio dia até abaixo do horizonte (spec 041): o sol desce de 60° a −4° no azimute (0,8; 0,6), a câmera no
+            // chão olhando para o lado dele, um pouco acima do horizonte (o céu passa do azul ao laranja e ao vermelho, as
+            // nuvens recebem a luz alaranjada e ficam contra o céu); a exposição pelo fotômetro.
+            cloudTerrain(app);
+            // A névoa seca do fim da tarde perto do chão (spec 041, R21: 0,15/km, 600 m — ~20 km de visibilidade, o ar
+            // úmido da foto do pôr do sol): o ar onde os feixes aparecem.
+            const { setSun } = cloudSky(
+                app,
+                60,
+                { coverage: 0.4, type: 0.5, wind: [6, 2] },
+                [0, 2, 0],
+                [800, 260, 600],
+                SUNSET_TURBIDITY,
+                { extinction: 0.15, scaleHeight: 0.6 },
+            );
+            return (i) => {
+                const t = i / 1199;
+                // Mais tempo perto do horizonte (onde a cor muda): a elevação desce pela raiz do tempo invertida.
+                setSun(-4 + 64 * (1 - t) ** 1.6);
+            };
+        },
+    },
+    'solposto-chao': {
+        frames: 1200,
+        warmup: 600,
+        build(app) {
+            // O `solposto` com a câmera apontada para o chão (spec 041): a mesma cena, a 40 m de altura e 2° abaixo do horizonte (o
+            // sol e os raios no alto do quadro), para ver a luz dourada no gramado perto da câmera.
+            cloudTerrain(app);
+            const { setSun } = cloudSky(
+                app,
+                60,
+                { coverage: 0.4, type: 0.5, wind: [6, 2] },
+                [0, 40, 0],
+                [800, 40 - 1000 * Math.tan((2 * Math.PI) / 180), 600],
+                SUNSET_TURBIDITY,
+                { extinction: 0.15, scaleHeight: 0.6 },
+            );
+            return (i) => {
+                const t = i / 1199;
+                setSun(-4 + 64 * (1 - t) ** 1.6);
+            };
+        },
+    },
+    raios: {
+        frames: 900,
+        warmup: 600,
+        build(app) {
+            // Raios de sol no céu azul (spec 041, R21): a câmera no chão olhando contra o sol a 38°, cúmulos de tempo bom
+            // passando na frente dele com o vento e o ar úmido perto do chão (névoa seca de 0,25/km até ~1,2 km: ~15 km de
+            // visibilidade, como na foto do céu azul com névoa) — os feixes de luz
+            // e de sombra saem dos vãos das nuvens no ar entre elas e a câmera (a atmosfera nos froxels, com a sombra das
+            // nuvens e do terreno).
+            cloudTerrain(app);
+            const { move } = cloudSky(
+                app,
+                38,
+                { coverage: 0.5, type: 0.45, wind: [9, 4], base: 1300, top: 2900 },
+                [0, 2, 0],
+                [800, 560, 600],
+                2,
+                { extinction: 0.25, scaleHeight: 1.2 },
+            );
+            return (i) => {
+                // Um giro lento de 6° para o lado do sol durante a tomada.
+                const a = Math.atan2(0.6, 0.8) - 0.05 + (i / 899) * 0.1;
+                move([0, 2, 0], [1000 * Math.cos(a), 560, 1000 * Math.sin(a)]);
+            };
+        },
+    },
+    'raios-vaos': {
+        frames: 900,
+        warmup: 600,
+        build(app) {
+            // Os raios das fotos (spec 041, R21): o sol a 15° atrás de uma camada de estratocúmulos fragmentados (1,4–2,1 km,
+            // cobertura 0,7, células de ~3 km com vãos de centenas de metros) entre a câmera e ele, a câmera no chão olhando
+            // para o sol 5° abaixo dele e o ar úmido de ~13 km de visibilidade (névoa seca de 0,3/km até 1,5 km): o feixe é o
+            // ar entre a câmera e a base da camada, aceso pelo vão e escuro na sombra.
+            cloudTerrain(app);
+            const target = (el: number, az: number): Vec3 => {
+                const e = (el * Math.PI) / 180;
+                const a = Math.atan2(0.6, 0.8) + (az * Math.PI) / 180;
+                return [1000 * Math.cos(e) * Math.cos(a), 2 + 1000 * Math.sin(e), 1000 * Math.cos(e) * Math.sin(a)];
+            };
+            const { move } = cloudSky(
+                app,
+                15,
+                {
+                    coverage: 0.7,
+                    type: 0.2,
+                    base: 1400,
+                    top: 2100,
+                    wind: [4, 1],
+                    shapeScale: 3000,
+                    detailScale: 600,
+                },
+                [0, 2, 0],
+                target(10, 0),
+                2,
+                { extinction: 0.3, scaleHeight: 1.5 },
+            );
+            return (i) => move([0, 2, 0], target(10, -3 + (6 * i) / 899));
+        },
+    },
+    'raios-chao': {
+        frames: 840,
+        warmup: 600,
+        build(app) {
+            // Os raios chegando ao chão perto da câmera (spec 041, R21 rodadas 19, 22, 24 e 25; pedido do usuário: "basta
+            // densificar mais as nuvens mas parametrizar pontos por onde os raios conseguem passar"): o sol de fim de tarde
+            // a 20° atrás de um convés grosso e fechado de estratocúmulos (750–1150 m, extinção 0,8/m, tipo 0,4, cobertura
+            // 0,86 fora dos vãos, forma de 1400 m e detalhe de 250 m: escuro por baixo, sem buracos de azul) com vãos em pontos dados pela cena (a função de cobertura, no
+            // referencial do vento). Cada vão é posto pela mancha de sol que acende no chão: [adiante (m, no rumo do sol, a
+            // partir da câmera), ao lado (m), raio (m)]. O centro fica (meia altura da camada − chão)/tan 20° ≈ 2,5 km além
+            // da mancha no rumo do sol; um vão vertical deixa o sol atravessar a camada se o raio passa de
+            // (espessura/2)/tan 20° ≈ 550 m, e a mancha acesa no chão tem 2 (raio − 550 m) ao longo do rumo do sol. O vão do
+            // meio (raio 700 m, na linha câmera → sol) acende ~300 m de grama a 250–550 m da câmera, que fica na sombra (vãos
+            // menores ao lado mostravam o azul e foram tirados). A borda: três harmônicos no raio e a transição de ±250 m da
+            // cobertura, que a
+            // forma de Perlin-Worley e a erosão recortam (sem círculo liso). O ar úmido rente ao chão (névoa seca de 1/km com
+            // altura de escala de 300 m), a câmera 3 m acima do chão, quase horizontal (rodada 24).
+            const elevation = 14;
+            const [base, top] = [750, 1150];
+            const wind: [number, number] = [2.5, -1.5];
+            const eye: Vec3 = [-850, 51.4, 4090];
+            const a0 = Math.atan2(0.6, 0.8);
+            // O chão em volta das manchas (m) e o meio da tomada em tempo simulado (s: 600 quadros de aquecimento e metade
+            // dos 840): o vão no mundo é o do referencial do vento mais o vento × tempo.
+            const ground = 45;
+            const mid = (600 + 420) / 60;
+            const shift = (0.5 * (base + top) - ground) / Math.tan((elevation * Math.PI) / 180);
+            const spots: [number, number, number][] = [
+                [-200, 0, 1000],
+            ];
+            const holes = spots.map(([ahead, side, r], k) => {
+                const along = ahead + shift;
+                const x = eye[0] + along * 0.8 - side * 0.6 - wind[0] * mid;
+                const z = eye[2] + along * 0.6 + side * 0.8 - wind[1] * mid;
+                return `vec4f(${x.toFixed(1)}, ${z.toFixed(1)}, ${r.toFixed(1)}, ${(k * 2.39 + 0.7).toFixed(2)})`;
+            });
+            // O ruído de valor (hash inteiro) de quatro oitavas no ponto `q` (WGSL em linha, dentro da função): `n` em [0, 1].
+            const noise = (out: string, q: string): string => `var ${out} = 0.0;
+    {
+        var p = ${q};
+        var amp = 0.5;
+        for (var o = 0u; o < 4u; o++) {
+            let i = floor(p);
+            let f = fract(p);
+            let u = f * f * (3.0 - 2.0 * f);
+            var g = vec4f(0.0);
+            for (var c = 0u; c < 4u; c++) {
+                let e = vec2i(i32(c & 1u), i32(c >> 1u));
+                let k = vec2u(vec2i(i) + e + vec2i(65536));
+                var h = (k.x * 1597334677u) ^ (k.y * 3812015801u) ^ (o * 2654435761u);
+                h = (h ^ (h >> 16u)) * 2246822519u;
+                h = h ^ (h >> 13u);
+                g[c] = f32(h) / 4294967295.0;
+            }
+            ${out} += amp * mix(mix(g.x, g.y, u.x), mix(g.z, g.w, u.x), u.y);
+            p = p * 2.03 + vec2f(17.3, 9.1);
+            amp *= 0.5;
+        }
+        ${out} /= 0.9375;
+    }`;
+            const code = /* wgsl */ `fn coverage_fn(xz: vec2f, time: f32, data: CoverageFnParams) -> vec3f {
+    var holes = array<vec4f, ${holes.length}>(${holes.join(', ')});
+    // As frestas: o ruído esticado no rumo do sol (700 m ao longo, 140 m de través) — tiras de nuvem paralelas ao feixe,
+    // que cortam o vão e a borda em várias fendas lado a lado (os raios separados vistos de frente para o sol).
+    let along = dot(xz, vec2f(0.8, 0.6));
+    let across = dot(xz, vec2f(-0.6, 0.8));
+    ${noise('slit', 'vec2f(along / 700.0, across / 140.0)')}
+    // Os rolos e as bolsas da base: faixas de ~700 m de través ao vento com o ruído isótropo de 500 m.
+    ${noise('lump', 'xz / 500.0')}
+    let roll = 0.5 + 0.5 * sin(6.2831853 * dot(xz, vec2f(0.51, -0.86)) / 700.0 + 3.0 * lump);
+    let bulge = 0.55 * lump + 0.45 * roll;
+    var c = 1.0;
+    for (var k = 0u; k < ${holes.length}u; k++) {
+        let h = holes[k];
+        let d = xz - h.xy;
+        let t = atan2(d.y, d.x);
+        let r = h.z * (1.0 + 0.14 * sin(3.0 * t + h.w) + 0.09 * sin(5.0 * t + 1.7 * h.w) + 0.06 * sin(9.0 * t + 2.3 * h.w)
+            + 0.04 * sin(17.0 * t + 3.1 * h.w));
+        let l = length(d);
+        let ring = smoothstep(r - 200.0, r + 200.0, l);
+        // A faixa da borda e o vão: a borda quebrada onde o ruído é baixo, pedaços de nuvem onde é alto.
+        let w = 1.0 - smoothstep(r + 150.0, r + 550.0, l);
+        let frag = max(ring * smoothstep(0.32, 0.46, slit), smoothstep(0.56, 0.66, slit));
+        c = min(c, mix(ring, frag, w));
+    }
+    return vec3f((0.84 + 0.08 * bulge) * c, 0.25 + 0.4 * bulge, 0.6 + 0.4 * bulge);
+}`;
+            const target = (el: number, az: number): Vec3 => {
+                const e = (el * Math.PI) / 180;
+                const a = a0 + (az * Math.PI) / 180;
+                return [
+                    eye[0] + 1000 * Math.cos(e) * Math.cos(a),
+                    eye[1] + 1000 * Math.sin(e),
+                    eye[2] + 1000 * Math.cos(e) * Math.sin(a),
+                ];
+            };
+            cloudTerrain(app);
+            const { move } = cloudSky(
+                app,
+                elevation,
+                {
+                    coverage: { code },
+                    type: 0.4,
+                    density: 0.8,
+                    base,
+                    top,
+                    wind,
+                    shapeScale: 1200,
+                    detailScale: 200,
+                },
+                eye,
+                target(-3, -5),
+                SUNSET_TURBIDITY,
+                { extinction: 1.0, scaleHeight: 0.3 },
+            );
+            return (i) => move(eye, target(-3, -6 + (4 * i) / 839));
+        },
+    },
+    solpostolento: {
+        frames: 3600,
+        warmup: 600,
+        build(app) {
+            // O `solposto` mais devagar (spec 041): o sol desce de 20° a −4° em 60 s, linear (0,4°/s, ~100 × o real).
+            cloudTerrain(app);
+            const { setSun } = cloudSky(
+                app,
+                20,
+                { coverage: 0.4, type: 0.5, wind: [6, 2] },
+                [0, 2, 0],
+                [800, 260, 600],
+                SUNSET_TURBIDITY,
+            );
+            return (i) => setSun(20 - 24 * (i / 3599));
+        },
+    },
+    solpostooposto: {
+        frames: 2400,
+        warmup: 600,
+        build(app) {
+            // O lado oposto ao pôr do sol (spec 041): a câmera de costas para o sol, olhando 6° acima do horizonte no azimute
+            // (−0,8; −0,6) enquanto o sol desce de 8° a −5° em 40 s — a sombra da Terra subindo do horizonte com o cinturão
+            // de Vênus (o rosa acima dela) e os raios anticrepusculares (as sombras das nuvens do lado do sol, convergindo
+            // para o ponto oposto a ele).
+            cloudTerrain(app);
+            const { setSun } = cloudSky(
+                app,
+                8,
+                { coverage: 0.4, type: 0.5, wind: [6, 2] },
+                [0, 2, 0],
+                [-800, 110, -600],
+                SUNSET_TURBIDITY,
+            );
+            return (i) => setSun(8 - 13 * (i / 2399));
+        },
+    },
+    voo: {
+        frames: 600,
+        warmup: 600,
+        build(app) {
+            // Do chão até acima da camada (spec 041): céu com nuvens, névoa densa dentro, mar de nuvens de cima.
+            cloudTerrain(app);
+            const { move } = cloudSky(
+                app,
+                40,
+                { coverage: 0.55, type: 0.5, wind: [6, 0], base: 1500, top: 3500 },
+                [0, 2, 0],
+                [1000, 600, 0],
+            );
+            return (i) => {
+                const t = i / 599;
+                const y = 2 + 5500 * t * t;
+                move([400 * t, y, 0], [400 * t + 1000, y + 600 - 900 * t, 200]);
+            };
+        },
+    },
+    tempestade: {
+        frames: 7200,
+        warmup: 1200,
+        build(app) {
+            // Uma tempestade se formando numa baixa sobre o terreno gramado (spec 041, R19) e chegando à câmera, com o
+            // tempo acelerado (`STORM_TIME`: o aquecimento cobre os 40 min antes, a gravação de 40 min a 4 h 40). Os cúmulos
+            // rasos do tempo bom (cobertura 0,3, topo a 2,8 km); a baixa se aprofunda a 65 km: a convergência sobe o ar e
+            // as células mais fortes viram cúmulos-nimbos até a tropopausa (11 km), com a água da torre (a base escura) e,
+            // depois, a bigorna de gelo levada pelo vento da alta troposfera (5 × o de condução: 18 m/s) à frente do sistema,
+            // por cima da câmera; no fim o centro está a 12 km e a câmera debaixo do sistema — o céu escurece e a
+            // sombra dela chega pelo terreno. A câmera a 60 m sobre as colinas (o
+            // chão visível vai de ~200 m a ~6 km: a sombra de uma nuvem anda pelo terreno, não cobre o chão inteiro de uma
+            // vez como na câmera a 2 m, que via só os primeiros metros) olhando a leste, 12° para cima; o sol de fim de
+            // tarde a 20°, 50° à direita da torre (fora do quadro): o lado dela virado para a câmera fica na sombra.
+            app.time.scale = STORM_TIME;
+            app.time.fixedDt = STORM_TIME / 60;
+            cloudTerrain(app);
+            const eye: Vec3 = [0, 60, 0];
+            cloudSky(
+                app,
+                20,
+                {
+                    coverage: 0.3,
+                    type: 0.5,
+                    base: 1200,
+                    top: 2800,
+                    wind: STORM_WIND,
+                    weather: {
+                        latitude: 40,
+                        scale: 192_000,
+                        formation: 1800,
+                        tropopause: 11_000,
+                        shear: 5,
+                        pressure: { code: STORM_PRESSURE },
+                    },
+                },
+                eye,
+                [STORM_VIEW[0] * 1000, 60 + 213, STORM_VIEW[1] * 1000],
+            );
+            return () => {};
+        },
+    },
+    sombrasnuvens: {
+        frames: 480,
+        warmup: 600,
+        build(app) {
+            // As sombras das nuvens correndo pelo terreno com vento forte, a água de um lago escavado nele (o reflexo das
+            // nuvens) e uma esfera de vidro (a refração das nuvens) (spec 041).
+            cloudTerrain(app, { center: [40, 30], half: 30, rim: 0.25 });
+            rippledWater(app, [60, 2, 60], [40, -0.9, 30]);
+            glassSphere(app, [30, 3, 22], 3, 1.5, 60);
+            // O sol a 70° e a cobertura de 0,35: a borda de uma sombra passa pelo lago durante a tomada (vista de cima, a 50°
+            // e 0,45 o lago ficava no meio de uma sombra de ~1 km o tempo todo).
+            const { move } = cloudSky(
+                app,
+                70,
+                { coverage: 0.35, type: 0.5, wind: [25, 5] },
+                [0, 14, 0],
+                [40, 0, 30],
+            );
+            return (i) => {
+                const a = (i / 479) * 0.6;
+                move([0, 14, 0], [40 * Math.cos(a) - 10 * Math.sin(a), 0, 30 + 10 * Math.sin(a)]);
+            };
+        },
+    },
     lente: {
         frames: 360,
         build(app) {
@@ -276,9 +1015,10 @@ export const SHOTS: Record<string, Shot> = {
                 height: H,
                 box: true,
                 camera,
-                // Ondulações mais calmas (a água assentada fica transparente).
-                material: { ripple: { strength: 0.12 } },
             });
+            for (const record of app.world.allRecords())
+                for (const r of record.resources)
+                    if (r instanceof clayflow.DirectionalLight) r.data.intensity = SUN_INTENSITY;
             // A imagem do mundo (panorâmica HDR, Poly Haven, CC0) para a água e o vidro refletirem; ela é o fundo.
             app.defaults.ambient.background = false;
             void loadHdr(`${import.meta.env.BASE_URL}env/quarry_cloudy_1k.hdr`).then((img) => {
@@ -301,7 +1041,32 @@ export const SHOTS: Record<string, Shot> = {
                 eye: [1.3, 1.25, 1.9],
                 surfaces: {
                     floor: clayflow.SurfacePhysics.CONCRETE,
-                    walls: clayflow.SurfacePhysics.GLASS,
+                    walls: clayflow.SurfacePhysics.WINDOW_GLASS,
+                    box: clayflow.SurfacePhysics.BRICK,
+                },
+            });
+            return () => undefined;
+        },
+    },
+    molharperto: {
+        frames: 360,
+        build(app) {
+            // A barragem vista de perto (a 12 cm da parede de vidro da frente, spec 034 T066d — a escala de uma foto de
+            // vidro molhado: a gota de 2 mm cobre ~10 pixels). A barragem é mais baixa que a da `molhar` (16 × 40 × 32:
+            // a água assenta a ~0,24 m) e a câmera olha a parede acima da linha d'água: a onda sobe pelo vidro, desce e
+            // deixa nele as gotas — cada uma uma lente do quadriculado atrás — e os filetes que descem. Com a barragem
+            // da `molhar`, a água assenta a ~0,45 m e a parede na vista fica submersa: sem película (a do lado de dentro
+            // é a própria água do tanque).
+            waterScene(app, {
+                width: W,
+                height: H,
+                box: true,
+                dam: [16, 40, 32],
+                eye: [0.2, 0.37, 0.53],
+                target: [0.12, 0.34, 0.4],
+                surfaces: {
+                    floor: clayflow.SurfacePhysics.CONCRETE,
+                    walls: clayflow.SurfacePhysics.WINDOW_GLASS,
                     box: clayflow.SurfacePhysics.BRICK,
                 },
             });
@@ -495,16 +1260,59 @@ export const SHOTS: Record<string, Shot> = {
                     .add(new StandardMaterial({ albedo: [0.7, 0.65, 0.5, 1], roughness: 0.9 }))
                     .add(
                         new clayflow.MaterialFunction({
-                            code: `fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) -> Closure {
+                            // O chão em várias escalas, por pixel: manchas de grama seca (~1,4 m), touceiras (~17 cm) e
+                            // o grão (~1,7 cm), cada oitava apagada quando o comprimento de onda dela cai abaixo de 3 pixels (a pegada `s.footprint`;
+                            // some de vez em 1,5), e as
+                            // bordas da areia, da grama e da rocha recortadas pelo mesmo ruído.
+                            code: `fn nat_hash(c: vec2f) -> f32 {
+    var p3 = fract(vec3f(c.x, c.y, c.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+fn nat_noise(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(nat_hash(i), nat_hash(i + vec2f(1.0, 0.0)), u.x);
+    let b = mix(nat_hash(i + vec2f(0.0, 1.0)), nat_hash(i + vec2f(1.0, 1.0)), u.x);
+    return mix(a, b, u.y) * 2.0 - 1.0;
+}
+fn nat_fbm(p: vec2f, scale: f32, footprint: f32) -> f32 {
+    var sum = 0.0;
+    var norm = 0.0;
+    var amp = 0.5;
+    var f = scale;
+    for (var k = 0u; k < 5u; k++) {
+        let w = select(1.0, clamp((1.0 / (f * footprint) - 1.5) / 1.5, 0.0, 1.0), footprint > 0.0);
+        sum += amp * w * nat_noise(p * f + vec2f(f32(k) * 17.3, f32(k) * 7.1));
+        norm += amp;
+        amp *= 0.5;
+        f *= 2.03;
+    }
+    return sum / norm;
+}
+fn material_fn(s: SurfaceSample, m: StandardMaterial, data: MaterialFnParams) -> Closure {
+    let xz = s.world_position.xz;
     let y = s.world_position.y;
     let slope = 1.0 - clamp(s.normal.y, 0.0, 1.0);
-    let grain = fract(sin(dot(floor(s.world_position.xz * 60.0), vec2f(12.9898, 78.233))) * 43758.5453);
-    let sand = vec3f(0.74, 0.67, 0.5) * (0.92 + 0.08 * grain);
-    let grass = vec3f(0.22, 0.34, 0.12) * (0.85 + 0.15 * grain);
-    let rock = vec3f(0.42, 0.4, 0.38) * (0.9 + 0.1 * grain);
-    var c = mix(sand, grass, smoothstep(-0.25, -0.05, y));
-    c = mix(c, rock, smoothstep(0.25, 0.45, slope));
-    return closure_diffuse(c, 0.0);
+    let big = nat_fbm(xz, 0.7, s.footprint);
+    let mid = nat_fbm(xz + vec2f(31.0, 5.0), 6.0, s.footprint);
+    let fine = nat_fbm(xz + vec2f(3.0, 47.0), 60.0, s.footprint);
+    let sand = vec3f(0.74, 0.67, 0.5) * (1.0 + 0.06 * mid + 0.14 * fine);
+    let lush = vec3f(0.13, 0.24, 0.06);
+    let dry = vec3f(0.3, 0.3, 0.12);
+    let grass = mix(lush, dry, smoothstep(0.2, 0.65, big)) * (1.0 + 0.35 * mid + 0.5 * fine);
+    let rock = vec3f(0.42, 0.4, 0.38) * (1.0 + 0.25 * mid + 0.3 * fine);
+    let edge = y + 0.06 * mid + 0.04 * big;
+    var c = mix(sand, grass, smoothstep(-0.17, -0.12, edge));
+    let grass_t = smoothstep(-0.17, -0.12, edge) * (1.0 - smoothstep(0.28, 0.38, slope + 0.05 * mid));
+    c = mix(c, rock, smoothstep(0.28, 0.38, slope + 0.05 * mid));
+    c = clamp(c, vec3f(0.0), vec3f(1.0));
+    // A mesma grama das cenas das nuvens: cutícula de cera (dielétrico n ≈ 1,45) sobre o difuso e o sheen do dossel; areia e
+    // rocha quase sem cera.
+    let base = closure_add(closure_diffuse(c, 0.0), closure_scale(closure_sheen(clamp(c * 3.0, vec3f(0.0), vec3f(1.0)), 0.6), 0.4 * grass_t));
+    let wax = closure_dielectric(1.45, vec3f(1.0), 0.8, 0.0, vec3f(1.0, 0.0, 0.0));
+    return closure_layer(wax, base, vec3f(1.0), mix(0.1, 0.3, grass_t));
 }`,
                         }),
                     )
@@ -638,17 +1446,18 @@ export const SHOTS: Record<string, Shot> = {
                 );
                 velocity.push(1, 0, 0);
             }
+            // Os sprites projetam sombra (opção do material: por padrão, sprites e linhas não projetam).
+            const dots = new clayflow.PointSpriteMaterial({ color: [1, 0.8, 0.2, 1], radius: 0.04 });
+            dots.castsShadow = true;
             app.world.insert(
-                new clayflow.FluidBody({ algorithm: 'SPH', position, velocity }).add(
-                    new clayflow.PointSpriteMaterial({ color: [1, 0.8, 0.2, 1], radius: 0.04 }),
-                ),
+                new clayflow.FluidBody({ algorithm: 'SPH', position, velocity }).add(dots),
             );
             const ball = new Transform({ position: [0, 0.4, 0, 1] });
+            const beads = new clayflow.PointSpriteMaterial({ color: [0.2, 0.6, 1, 1], radius: 0.03 });
+            beads.castsShadow = true;
             app.world.insert(
                 new SphereGeometry({ radius: 0.25, latSegments: 8, lonSegments: 16 })
-                    .add(
-                        new clayflow.PointSpriteMaterial({ color: [0.2, 0.6, 1, 1], radius: 0.03 }),
-                    )
+                    .add(beads)
                     .add(ball),
             );
             camera(app, 0.8, [0, 1, 3], [0, 0.4, 0]);
