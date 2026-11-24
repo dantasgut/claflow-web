@@ -468,7 +468,7 @@ const SHOWCASE_RELIEF: Partial<Record<MaterialName, NonNullable<Piece['displaced
     barkBirch: { scale: RELIEF_SCALE, pattern: [1, 1] },
 };
 
-/** As famílias da vitrine: os 74 materiais da biblioteca, cada um numa cena. */
+/** As famílias da vitrine: os 75 materiais da biblioteca, cada um numa cena. */
 const SHOWCASE: Readonly<Record<string, Showcase>> = {
     metais: {
         back: ['gold', 'copper', 'brass', 'chrome'],
@@ -506,7 +506,7 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
         back: ['glass', 'ice', 'porcelain', 'marble'],
         front: ['skin', 'wax', 'jade', 'milk'],
     },
-    organicos: { back: [], front: ['soap', 'ivory', 'motherOfPearl', 'snow'] },
+    organicos: { back: ['skinDetailed'], front: ['soap', 'ivory', 'motherOfPearl', 'snow'] },
 };
 
 /**

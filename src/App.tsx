@@ -2,11 +2,21 @@ import { useEffect, useRef, useState } from 'react';
 import { Application, createScene } from 'clayflow/web';
 import { H, SHOTS, W } from './scenes/catalog';
 import { FpsCounter, ScenePanel } from './ScenePanel';
-import { galleryMaterial, MaterialGallery } from './MaterialGallery';
+import type { MaterialName } from 'clayflow/web';
+import { MaterialGallery } from './MaterialGallery';
+import { MATERIAL_FAMILIES } from './scenes/materiais';
 import { TimeControls } from './TimeControls';
 import { TimeNavigator } from './TimeNavigator';
 
 const NAMES = Object.keys(SHOTS);
+
+/** O material pedido na URL (`?material=<nome>`; nome desconhecido: o primeiro), ou `undefined` sem o parâmetro. */
+function galleryMaterial(): MaterialName | undefined {
+    const name = new URLSearchParams(location.search).get('material');
+    if (name === null) return undefined;
+    const all = MATERIAL_FAMILIES.flatMap(([, names]) => names);
+    return all.find((n) => n === name) ?? all[0];
+}
 
 /**
  * O catálogo de cenas do clayflow-web (spec 038): `?scene=<nome>` abre a cena no canvas pelo `clayflow/web`, com o laço

@@ -14,15 +14,6 @@ interface Param {
     readonly default?: Value;
 }
 
-const ALL: readonly MaterialName[] = MATERIAL_FAMILIES.flatMap(([, names]) => names);
-
-/** O material pedido na URL, ou `undefined` (sem o parâmetro ou nome desconhecido). */
-export function galleryMaterial(): MaterialName | undefined {
-    const name = new URLSearchParams(location.search).get('material');
-    if (name === null) return undefined;
-    return (ALL as readonly string[]).includes(name) ? (name as MaterialName) : ALL[0];
-}
-
 const toSrgb = (c: number): number =>
     c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
 const toLinear = (c: number): number =>
@@ -77,7 +68,8 @@ export function MaterialGallery({ name }: { readonly name: MaterialName }) {
     const hostRef = useRef<HTMLDivElement>(null);
     const [error, setError] = useState<string | null>(null);
     const [running, setRunning] = useState<Application | null>(null);
-    const [stage, setStage] = useState<MaterialStage | null>(null);
+    // O palco é do motor (as funções do material e do deslocamento, cujos valores mudam no lugar): fora do estado.
+    const stageRef = useRef<MaterialStage | null>(null);
     const definition = nodes.material[name] as NodeDefinition;
     const params = definition.params as Readonly<Record<string, Param>>;
     const [values, setValues] = useState<Record<string, Value>>({});
@@ -119,7 +111,7 @@ export function MaterialGallery({ name }: { readonly name: MaterialName }) {
                 );
                 created.start();
                 setRunning(created);
-                setStage(made);
+                stageRef.current = made;
                 setValues({ ...made.staged } as Record<string, Value>);
             } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
@@ -128,7 +120,7 @@ export function MaterialGallery({ name }: { readonly name: MaterialName }) {
         return () => {
             disposed = true;
             setRunning(null);
-            setStage(null);
+            stageRef.current = null;
             app?.dispose();
             canvas.remove();
         };
@@ -137,6 +129,7 @@ export function MaterialGallery({ name }: { readonly name: MaterialName }) {
     const current = (key: string): Value => values[key] ?? params[key]?.default ?? 0;
     const change = (key: string, value: Value): void => {
         setValues((v) => ({ ...v, [key]: value }));
+        const stage = stageRef.current;
         if (stage === null) return;
         stage.material.values[key] = value;
         // O relevo é um só para a cor e a geometria: o mesmo valor no deslocamento, quando ele tem o parâmetro.
@@ -145,11 +138,12 @@ export function MaterialGallery({ name }: { readonly name: MaterialName }) {
         }
     };
     const reset = (): void => {
+        const staged = stageRef.current?.staged ?? {};
         for (const key of Object.keys(values)) {
-            const back = stage?.staged[key] ?? params[key]?.default;
+            const back = staged[key] ?? params[key]?.default;
             if (back !== undefined) change(key, back as Value);
         }
-        setValues({ ...(stage?.staged ?? {}) } as Record<string, Value>);
+        setValues({ ...staged } as Record<string, Value>);
     };
 
     const origin = subgraphOrigin(definition);
@@ -200,7 +194,7 @@ export function MaterialGallery({ name }: { readonly name: MaterialName }) {
                     {origin === undefined ? (
                         <p>Este material não é um sub-grafo de nós.</p>
                     ) : (
-                        <GraphView root={definition} lit={lit} />
+                        <GraphView key={name} root={definition} lit={lit} />
                     )}
                 </div>
             </main>
@@ -334,10 +328,6 @@ const GAP_Y = 10;
 function GraphView({ root, lit }: { readonly root: NodeDefinition; readonly lit: string | null }) {
     const [path, setPath] = useState<readonly NodeDefinition[]>([root]);
     const [picked, setPicked] = useState<string | null>(null);
-    useEffect(() => {
-        setPath([root]);
-        setPicked(null);
-    }, [root]);
     const shown = path[path.length - 1] ?? root;
     const layout = useMemo(() => {
         const graph = subgraphOrigin(shown)?.graph;
