@@ -25,7 +25,8 @@ import {
     UiText,
 } from 'clayflow/web';
 import type { Application, MaterialFunction, MaterialName } from 'clayflow/web';
-import { H, W, type Shot } from './catalog';
+import type { Shot } from './catalog';
+import { H, W } from './size';
 import { materialGraph } from './support/materialScenes';
 
 type Vec3 = readonly [number, number, number];
@@ -551,6 +552,23 @@ const FACE_NECK = 5.9;
 const FACE_KEY: Vec3 = [-0.55, 0.45, 0.7];
 const FACE_BACK: Vec3 = [0.75, 0.3, -0.6];
 
+/**
+ * O globo ocular com a córnea: a esfera de parametrização frontal (o centro do uv voltado para +z, o olhar) com a
+ * calota da córnea saliente — o raio cresce `bulge` no eixo do olhar e volta ao do globo onde o seno do ângulo com o
+ * eixo chega a `cornea` (a borda da íris).
+ */
+const EYE_CODE = `fn surface_fn(u: f32, v: f32, time: f32, data: SurfaceFnParams) -> vec3f {
+    let a = clamp(2.0 * u - 1.0, -1.0, 1.0);
+    let b = clamp(2.0 * v - 1.0, -1.0, 1.0);
+    let d = vec2f(a * sqrt(1.0 - 0.5 * b * b), b * sqrt(1.0 - 0.5 * a * a));
+    let r2 = min(dot(d, d), 1.0);
+    let k = 2.0 * sqrt(1.0 - r2);
+    let dir = vec3f(d.x * k, d.y * k, 1.0 - 2.0 * r2);
+    let w = 1.0 - smoothstep(0.0, data.cornea, length(dir.xy));
+    let lift = select(0.0, data.bulge * w * w, dir.z > 0.0);
+    return data.radius * (1.0 + lift) * dir;
+}`;
+
 /** A posição no objeto de um ponto da malha do MakeHuman (em decímetros no arquivo). */
 const facePoint = (x: number, y: number, z: number): Vec3 => {
     const k = FACE_SCALE / 10;
@@ -622,6 +640,9 @@ function faceSkin(values: Values): MaterialFunction {
     const earR = blob('ear_r', facePoint(-0.85, 7.2, 0.35), 0.06, 0.26);
     const brow = blob('brow', facePoint(0, 7.85, 1.4), 0.1, 0.42);
     const lips = blob('lips', facePoint(0, 6.6, 1.58), 0.08, 0.2, [1, 2.8, 1]);
+    // O contorno dos olhos: a pele fina das pálpebras, mais vermelha e mais escura.
+    const socketL = blob('socket_l', facePoint(0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
+    const socketR = blob('socket_r', facePoint(-0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
     links.push(
         [
             total('blood', [
@@ -631,6 +652,8 @@ function faceSkin(values: Values): MaterialFunction {
                 [earL, 3.5],
                 [earR, 3.5],
                 [lips, 4],
+                [socketL, 0.8],
+                [socketR, 0.8],
             ]),
             'skin.blood_mask',
         ],
@@ -644,13 +667,21 @@ function faceSkin(values: Values): MaterialFunction {
         ],
     );
     graph.lip_a = nodes.math.value3.with({ value: [1, 1, 1] });
-    graph.lip_b = nodes.math.value3.with({ value: [0.82, 0.5, 0.48] });
+    graph.lip_b = nodes.math.value3.with({ value: [0.78, 0.44, 0.43] });
     graph.lip = nodes.math.mix3;
+    graph.lid_b = nodes.math.value3.with({ value: [0.88, 0.78, 0.76] });
+    graph.lid_sum = nodes.math.max;
+    graph.lid = nodes.math.mix3;
     links.push(
         ['lip_a.value', 'lip.a'],
         ['lip_b.value', 'lip.b'],
         [lips, 'lip.t'],
-        ['lip.value', 'skin.tint'],
+        [socketL, 'lid_sum.a'],
+        [socketR, 'lid_sum.b'],
+        ['lip.value', 'lid.a'],
+        ['lid_b.value', 'lid.b'],
+        ['lid_sum.value', 'lid.t'],
+        ['lid.value', 'skin.tint'],
     );
     return materialGraph(graph as Parameters<typeof materialGraph>[0], links, 'skin.value');
 }
@@ -661,7 +692,17 @@ function face(app: Application, fn: MaterialFunction, iris: Values): Promise<voi
     const lift = -0.1;
     for (const c of FACE_EYES) {
         app.world.insert(
-            new SphereGeometry({ radius: FACE_EYE_RADIUS, latSegments: 48, lonSegments: 96 })
+            new ParametricSurface({
+                domain: [0, 1, 0, 1],
+                adaptive: { ...RELIEF_MESH, patches: [24, 24], periodic: [false, false] },
+            })
+                .add(
+                    new SurfaceFunction({
+                        code: EYE_CODE,
+                        params: { radius: 'f32', bulge: 'f32', cornea: 'f32' },
+                        values: { radius: FACE_EYE_RADIUS, bulge: 0.11, cornea: 0.52 },
+                    }),
+                )
                 .add(new StandardMaterial())
                 .add(new Transform({ position: [c[0], c[1] + lift, c[2], 1] }))
                 .add(Materials.eye({ scale: FACE_SCALE, ...iris })),
@@ -719,8 +760,20 @@ function faceShot(skin: Values, iris: Values = {}, close = false): Shot {
             );
             // Os painéis a um terço (a luz de preenchimento e o reflexo nos olhos): a principal modela o rosto.
             studio(app, 0.33);
-            directional(app, FACE_KEY, 2.6, true);
+            directional(app, FACE_KEY, 2, true);
             directional(app, FACE_BACK, 1.8);
+            // A caixa de luz do retrato, à frente e acima: a luz macia no rosto e o reflexo dela na córnea.
+            const box: Vec3 = [-1.5, 2.1, 3.4];
+            const aim = unit3(sub3([0, 0.75, 0.3], box));
+            app.world.insert(
+                new RectLight({
+                    position: [...box, 1],
+                    direction: [...aim, 0],
+                    right: cross3(aim, [0, 1, 0]),
+                    size: [1.2, 1.2],
+                    intensity: 8,
+                }),
+            );
             backdrop(app, -0.1, 0.07);
             void face(app, faceSkin(skin), iris);
             return (i) => {

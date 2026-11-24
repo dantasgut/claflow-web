@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Application, createScene, nodes, OrbitController, subgraphOrigin } from 'clayflow/web';
 import type { MaterialName, NodeDefinition } from 'clayflow/web';
-import { H, W } from './scenes/catalog';
+import { H, W } from './scenes/size';
 import { MATERIAL_FAMILIES, materialStage, type MaterialStage } from './scenes/materiais';
 import { FpsCounter } from './ScenePanel';
 

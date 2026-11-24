@@ -29,6 +29,7 @@ import { CAUSTIC_SPHERE, CAUSTIC_SUN } from './support/causticScenes';
 import { WATER_SPACING, waterLook, waterScene } from './support/waterScene';
 import { loadHdr } from './support/hdr';
 import { MATERIAL_SHOTS } from './materiais';
+import { H, W } from './size';
 
 /**
  * A luz de um dia de sol na `agua`: o sol direto 6 a 8 vezes a luz do céu no chão (medido com a panorâmica a 0,6 e o
@@ -40,8 +41,7 @@ const SUN_INTENSITY = 4.8;
 
 
 const q = new URLSearchParams(location.search);
-export const W = Number(q.get('w') ?? 1280);
-export const H = Number(q.get('h') ?? 720);
+export { H, W } from './size';
 /** `?girar` (0,3 rad/s) ou `?girar=<rad/s>`: a câmera orbital gira sozinha enquanto a animação roda. */
 const SPIN = q.has('girar') ? Number(q.get('girar') || 0.3) : 0;
 
