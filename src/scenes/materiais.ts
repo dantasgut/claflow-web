@@ -585,7 +585,15 @@ const FACE_EYE_RADIUS = (0.138 * FACE_SCALE) / 10;
  * perto da superfície nas bochechas, no nariz e nas orelhas; o óleo na testa e no nariz; os lábios mais vermelhos,
  * mais escuros e mais brilhantes. Cada máscara: 1 dentro do raio interno em volta do ponto, 0 fora do externo.
  */
-function faceSkin(values: Values): MaterialFunction {
+/** O jeito das regiões do rosto: o peso da vermelhidão e as cores que multiplicam os lábios e o contorno dos olhos. */
+interface FaceLook {
+    readonly flush: number;
+    readonly lip: Vec3;
+    readonly lid: Vec3;
+}
+const FACE_ROSY: FaceLook = { flush: 1, lip: [0.78, 0.44, 0.43], lid: [0.88, 0.78, 0.76] };
+
+function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction {
     const graph: Record<string, unknown> = {
         s: nodes.input.surfaceSample(),
         skin: nodes.material.skinDetailed.with({ scale: FACE_SCALE, ...values }),
@@ -648,14 +656,14 @@ function faceSkin(values: Values): MaterialFunction {
     links.push(
         [
             total('blood', [
-                [cheekL, 3],
-                [cheekR, 3],
-                [nose, 2.4],
-                [earL, 3.5],
-                [earR, 3.5],
-                [lips, 4],
-                [socketL, 0.8],
-                [socketR, 0.8],
+                [cheekL, 3 * look.flush],
+                [cheekR, 3 * look.flush],
+                [nose, 2.4 * look.flush],
+                [earL, 3.5 * look.flush],
+                [earR, 3.5 * look.flush],
+                [lips, 4 * look.flush],
+                [socketL, 0.8 * look.flush],
+                [socketR, 0.8 * look.flush],
             ]),
             'skin.blood_mask',
         ],
@@ -669,9 +677,9 @@ function faceSkin(values: Values): MaterialFunction {
         ],
     );
     graph.lip_a = nodes.math.value3.with({ value: [1, 1, 1] });
-    graph.lip_b = nodes.math.value3.with({ value: [0.78, 0.44, 0.43] });
+    graph.lip_b = nodes.math.value3.with({ value: [...look.lip] });
     graph.lip = nodes.math.mix3;
-    graph.lid_b = nodes.math.value3.with({ value: [0.88, 0.78, 0.76] });
+    graph.lid_b = nodes.math.value3.with({ value: [...look.lid] });
     graph.lid_sum = nodes.math.max;
     graph.lid = nodes.math.mix3;
     links.push(
@@ -739,6 +747,7 @@ function faceShot(
     iris: Values = {},
     close: boolean | 'eye' = false,
     hard = false,
+    look: FaceLook = FACE_ROSY,
 ): Shot {
     return {
         frames: GALLERY_FRAMES,
@@ -784,11 +793,11 @@ function faceShot(
                 // sobrancelha, recebe a luz inteira e sai branco. Ficam fracas (o reflexo na córnea); quem ilumina
                 // são as direcionais, com sombra: a principal e um preenchimento do outro lado.
                 studio(app, 0.12);
-                directional(app, [0.7, 0.25, 0.65], 0.55, true);
-                directional(app, FACE_KEY, 2.6, true);
+                directional(app, [0.7, 0.25, 0.65], 0.3, true);
+                directional(app, FACE_KEY, 1.9, true);
                 // A contraluz sem sombra: com ela a luz atravessaria as partes finas (a orelha), mas a espessura lida do mapa
                 // de sombra sai zero em manchas na borda do rosto (defeito em aberto; ver `pele-rosto-luz-dura`).
-                directional(app, FACE_BACK, 1.8);
+                directional(app, FACE_BACK, 0.8);
                 // A caixa de luz do retrato, à frente e acima: a luz macia no rosto e o reflexo dela na córnea.
                 const box: Vec3 = [-1.5, 2.1, 3.4];
                 const aim = unit3(sub3([0, 0.75, 0.3], box));
@@ -803,7 +812,7 @@ function faceShot(
                 );
             }
             backdrop(app, -0.1, 0.07);
-            void face(app, faceSkin(skin), iris);
+            void face(app, faceSkin(skin, look), iris);
             return (i) => {
                 const t = i / (GALLERY_FRAMES - 1);
                 const p = eye(mix(-32, 32, t) * DEG);
@@ -878,6 +887,26 @@ export function materialStage(app: Application, name: MaterialName): MaterialSta
     return { ...made, staged, camera, eye, target };
 }
 
+const FOTO_SKIN: Values = {
+    melanin: 0.5,
+    blood: 0.35,
+    freckles: 0.05,
+    oil: 0.75,
+    oil_roughness: 0.38,
+    roughness: 0.62,
+    light_color: [0.7, 0.47, 0.3],
+    dark_color: [0.22, 0.13, 0.07],
+    flush_color: [1, 0.66, 0.6],
+};
+const FOTO_EYE: Values = {
+    sclera_color: [0.34, 0.31, 0.28],
+    iris_color: [0.028, 0.013, 0.006],
+    iris_edge_color: [0.01, 0.005, 0.003],
+    pupil_size: 0.4,
+    veins: 0.5,
+};
+const FOTO_LOOK: FaceLook = { flush: 0.45, lip: [0.86, 0.66, 0.66], lid: [0.74, 0.66, 0.6] };
+
 export const MATERIAL_SHOTS: Record<string, Shot> = {
     // A pele no rosto da malha base do MakeHuman.
     'pele-rosto': faceShot({}),
@@ -885,6 +914,10 @@ export const MATERIAL_SHOTS: Record<string, Shot> = {
     'pele-rosto-luz-dura': faceShot({}, {}, true, true),
     'pele-rosto-perto': faceShot({}, {}, true),
     'olho-perto': faceShot({}, {}, 'eye'),
+    // A pele pela foto de um rosto real: mais escura e oliva, pouca vermelhidão, o brilho largo, os lábios apagados, o
+    // contorno dos olhos acastanhado, a esclera cinza-bege e a íris quase preta.
+    'pele-rosto-foto': faceShot(FOTO_SKIN, FOTO_EYE, false, false, FOTO_LOOK),
+    'pele-rosto-foto-perto': faceShot(FOTO_SKIN, FOTO_EYE, true, false, FOTO_LOOK),
     'pele-rosto-escura': faceShot(
         { melanin: 0.85, blood: 0.3, freckles: 0 },
         { iris_color: [0.16, 0.08, 0.03], iris_edge_color: [0.05, 0.025, 0.01] },
