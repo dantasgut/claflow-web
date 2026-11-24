@@ -18,6 +18,7 @@ import {
     PlaneGeometry,
     RectLight,
     Sky,
+    SoftBody,
     SphereGeometry,
     StandardMaterial,
     SurfaceFunction,
@@ -338,7 +339,11 @@ function set(fn: Valued, name: string, value: number | number[]): void {
 }
 
 /** Os painéis do estúdio da galeria e o ambiente escuro; devolve o giro deles em torno do meio da cena. */
-function studio(app: Application, gain = 1): (angle: number) => void {
+function studio(
+    app: Application,
+    gain = 1,
+    bounce: Record<string, unknown> = {},
+): (angle: number) => void {
     app.defaults.ambient.data.skyColor = [1, 1, 1, 1];
     app.defaults.ambient.data.groundColor = [1, 1, 1, 1];
     app.defaults.ambient.data.intensity = GALLERY_STUDIO_AMBIENT * gain;
@@ -361,7 +366,7 @@ function studio(app: Application, gain = 1): (angle: number) => void {
             axis: [x[0]!, x[1]!, x[2]!] as Vec3,
         };
     });
-    gi(app);
+    gi(app, bounce);
     return (angle) => {
         for (const { light, at, normal, axis } of lights) {
             light.data.position = [...turn(at, angle), 1];
@@ -371,13 +376,14 @@ function studio(app: Application, gain = 1): (angle: number) => void {
     };
 }
 
-function gi(app: Application): void {
+function gi(app: Application, values: Record<string, unknown> = {}): void {
     app.world.insert(
         new GlobalIllumination({
             quality: 'medium',
             probeSpacing: 0.5,
             center: [0, 0.6, 0],
             screenGather: false,
+            ...values,
         }),
     );
 }
@@ -509,7 +515,7 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
         back: ['glass', 'ice', 'porcelain', 'marble'],
         front: ['skin', 'wax', 'jade', 'milk'],
     },
-    organicos: { back: ['skinDetailed', 'eye'], front: ['soap', 'ivory', 'motherOfPearl', 'snow'] },
+    organicos: { back: ['skinDetailed', 'eye', 'lips'], front: ['soap', 'ivory', 'motherOfPearl', 'snow'] },
 };
 
 /**
@@ -588,10 +594,18 @@ const FACE_EYE_RADIUS = (0.138 * FACE_SCALE) / 10;
 /** O jeito das regiões do rosto: o peso da vermelhidão e as cores que multiplicam os lábios e o contorno dos olhos. */
 interface FaceLook {
     readonly flush: number;
+    /** A cor do material dos lábios. */
     readonly lip: Vec3;
     readonly lid: Vec3;
+    /** O quanto os lábios estão úmidos (o `gloss` do material deles). */
+    readonly gloss: number;
 }
-const FACE_ROSY: FaceLook = { flush: 1, lip: [0.78, 0.44, 0.43], lid: [0.88, 0.78, 0.76] };
+const FACE_ROSY: FaceLook = {
+    flush: 1,
+    lip: [0.5, 0.22, 0.22],
+    lid: [0.88, 0.78, 0.76],
+    gloss: 0.5,
+};
 
 function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction {
     const graph: Record<string, unknown> = {
@@ -661,7 +675,6 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
                 [nose, 2.4 * look.flush],
                 [earL, 3.5 * look.flush],
                 [earR, 3.5 * look.flush],
-                [lips, 4 * look.flush],
                 [socketL, 0.8 * look.flush],
                 [socketR, 0.8 * look.flush],
             ]),
@@ -671,35 +684,40 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
             total('oil', [
                 [brow, 0.7],
                 [nose, 1],
-                [lips, 1.5],
             ]),
             'skin.oil_mask',
         ],
     );
-    graph.lip_a = nodes.math.value3.with({ value: [1, 1, 1] });
-    graph.lip_b = nodes.math.value3.with({ value: [...look.lip] });
-    graph.lip = nodes.math.mix3;
+    graph.lid_a = nodes.math.value3.with({ value: [1, 1, 1] });
     graph.lid_b = nodes.math.value3.with({ value: [...look.lid] });
     graph.lid_sum = nodes.math.max;
     graph.lid = nodes.math.mix3;
+    // Os lábios são outro material (`lips`): misturado à pele pela máscara deles.
+    graph.mouth = nodes.material.lips.with({
+        scale: FACE_SCALE,
+        color: [...look.lip],
+        gloss: look.gloss,
+    });
+    graph.face = nodes.closure.mix;
     links.push(
-        ['lip_a.value', 'lip.a'],
-        ['lip_b.value', 'lip.b'],
-        [lips, 'lip.t'],
         [socketL, 'lid_sum.a'],
         [socketR, 'lid_sum.b'],
-        ['lip.value', 'lid.a'],
+        ['lid_a.value', 'lid.a'],
         ['lid_b.value', 'lid.b'],
         ['lid_sum.value', 'lid.t'],
         ['lid.value', 'skin.tint'],
+        ['skin.value', 'face.a'],
+        ['mouth.value', 'face.b'],
+        [lips, 'face.t'],
     );
-    return materialGraph(graph as Parameters<typeof materialGraph>[0], links, 'skin.value');
+    return materialGraph(graph as Parameters<typeof materialGraph>[0], links, 'face.value');
 }
 
 /** A cabeça da malha base do MakeHuman, com o material `fn`, e os dois globos oculares; devolve quando entrou. */
-function face(app: Application, fn: MaterialFunction, iris: Values): Promise<void> {
+function face(app: Application, fn: MaterialFunction, iris: Values, soft = false): Promise<void> {
     const k = FACE_SCALE / 10;
-    const lift = -0.1;
+    // As partículas do corpo mole estão em mundo: sem o `Transform`, a cabeça fica na altura do arquivo.
+    const lift = soft ? 0 : -0.1;
     for (const c of FACE_EYES) {
         app.world.insert(
             new ParametricSurface({
@@ -724,18 +742,90 @@ function face(app: Application, fn: MaterialFunction, iris: Values): Promise<voi
             return response.text();
         })
         .then((text) => {
-            app.world.insert(
-                MeshGeometry.fromObj(text, {
-                    groups: ['body'],
-                    scale: k,
-                    offset: [0, -FACE_NECK * k, -0.6 * k],
-                    keep: (_x, y) => y > 0,
-                })
-                    .add(new StandardMaterial())
-                    .add(new Transform({ position: [0, lift, 0, 1] }))
-                    .add(fn),
-            );
+            const mesh = MeshGeometry.fromObj(text, {
+                groups: ['body'],
+                scale: k,
+                offset: [0, -FACE_NECK * k, -0.6 * k],
+                keep: (_x, y) => y > 0,
+            });
+            if (!soft) {
+                app.world.insert(
+                    mesh
+                        .add(new StandardMaterial())
+                        .add(new Transform({ position: [0, lift, 0, 1] }))
+                        .add(fn),
+                );
+                return;
+            }
+            app.world.insert(softFace(mesh).add(new StandardMaterial()).add(new Transform()).add(fn));
         });
+}
+
+/**
+ * A cabeça como corpo mole (XPBD): uma partícula por posição da malha (os vértices repetidos na costura do uv unidos),
+ * as arestas dos triângulos como restrições rígidas (a pele não estica) e, para cada partícula, uma âncora fixa
+ * (massa 0) recuada `FACE_TISSUE` para dentro pela normal, ligada por uma restrição mais mole — o tecido entre a pele
+ * e o osso. A pele pesa, cede e volta; a forma de repouso é a da malha.
+ */
+const FACE_TISSUE = 0.05;
+function softFace(mesh: MeshGeometry): SoftBody {
+    const { vertices, indices } = mesh.data;
+    const index = new Map<string, number>();
+    const remap: number[] = [];
+    const position: number[] = [];
+    const normal: number[] = [];
+    const uvs: number[] = [];
+    for (let i = 0; i < vertices.length / 8; i++) {
+        const [x, y, z] = [vertices[i * 8]!, vertices[i * 8 + 1]!, vertices[i * 8 + 2]!];
+        const key = `${x.toFixed(5)},${y.toFixed(5)},${z.toFixed(5)}`;
+        let at = index.get(key);
+        if (at === undefined) {
+            at = position.length / 3;
+            index.set(key, at);
+            position.push(x, y, z);
+            normal.push(vertices[i * 8 + 3]!, vertices[i * 8 + 4]!, vertices[i * 8 + 5]!);
+            uvs.push(vertices[i * 8 + 6]!, vertices[i * 8 + 7]!);
+        }
+        remap.push(at);
+    }
+    const n = position.length / 3;
+    const triangles = Array.from(indices, (i) => remap[i]!);
+    const a: number[] = [];
+    const b: number[] = [];
+    const compliance: number[] = [];
+    const seen = new Set<number>();
+    for (let t = 0; t < triangles.length; t += 3) {
+        for (let e = 0; e < 3; e++) {
+            const [p, q] = [triangles[t + e]!, triangles[t + ((e + 1) % 3)]!];
+            if (p === q) continue;
+            const id = Math.min(p, q) * n + Math.max(p, q);
+            if (seen.has(id)) continue;
+            seen.add(id);
+            a.push(p);
+            b.push(q);
+            compliance.push(0);
+        }
+    }
+    // As âncoras: depois das partículas da pele, fora dos triângulos.
+    const mass = new Array<number>(2 * n).fill(0.002, 0, n).fill(0, n);
+    for (let i = 0; i < n; i++) {
+        position.push(
+            position[i * 3]! - normal[i * 3]! * FACE_TISSUE,
+            position[i * 3 + 1]! - normal[i * 3 + 1]! * FACE_TISSUE,
+            position[i * 3 + 2]! - normal[i * 3 + 2]! * FACE_TISSUE,
+        );
+        uvs.push(0, 0);
+        a.push(i);
+        b.push(n + i);
+        compliance.push(0.02);
+    }
+    return new SoftBody({
+        algorithm: 'XPBD',
+        position,
+        mass,
+        edges: { a, b, compliance },
+        surface: { triangles, uvs },
+    });
 }
 
 /**
@@ -748,6 +838,8 @@ function faceShot(
     close: boolean | 'eye' = false,
     hard = false,
     look: FaceLook = FACE_ROSY,
+    /** `bounce`: a iluminação global com a coleta na tela (a luz rebatida de perto); `soft`: a cabeça de corpo mole. */
+    extra: { readonly bounce?: boolean; readonly soft?: boolean } = {},
 ): Shot {
     return {
         frames: GALLERY_FRAMES,
@@ -780,7 +872,13 @@ function faceShot(
             // A imagem do mundo (panorâmica HDR, Poly Haven, CC0), fraca e fora do fundo: o que a córnea e o óleo da
             // pele refletem além das luzes.
             void loadHdr(`${import.meta.env.BASE_URL}env/quarry_cloudy_1k.hdr`).then((img) => {
-                app.world.insert(new EnvironmentMap({ ...img, intensity: 0.04, background: false }));
+                app.world.insert(
+                    new EnvironmentMap({
+                        ...img,
+                        intensity: extra.bounce === true ? 0.15 : 0.04,
+                        background: false,
+                    }),
+                );
             });
             if (hard) {
                 // A luz dura de lado e a contraluz atrás da orelha, quase sem preenchimento: o terminador cruza o
@@ -792,7 +890,15 @@ function faceShot(
                 // As luzes de área não projetam sombra: sob elas o globo ocular, recuado sob a pálpebra e a
                 // sobrancelha, recebe a luz inteira e sai branco. Ficam fracas (o reflexo na córnea); quem ilumina
                 // são as direcionais, com sombra: a principal e um preenchimento do outro lado.
-                studio(app, 0.12);
+                studio(
+                    app,
+                    0.12,
+                    // A luz rebatida de perto, por raios das superfícies visíveis: as órbitas, sob o nariz e sob o
+                    // lábio recebem menos céu porque o rosto o tapa — calculado, não pintado.
+                    extra.bounce === true
+                        ? { quality: 'high', probeSpacing: 0.25, center: [0, 0.7, 0.2], screenGather: true }
+                        : {},
+                );
                 directional(app, [0.7, 0.25, 0.65], 0.3, true);
                 directional(app, FACE_KEY, 1.9, true);
                 // A contraluz sem sombra: com ela a luz atravessaria as partes finas (a orelha), mas a espessura lida do mapa
@@ -812,7 +918,7 @@ function faceShot(
                 );
             }
             backdrop(app, -0.1, 0.07);
-            void face(app, faceSkin(skin, look), iris);
+            void face(app, faceSkin(skin, look), iris, extra.soft === true);
             return (i) => {
                 const t = i / (GALLERY_FRAMES - 1);
                 const p = eye(mix(-32, 32, t) * DEG);
@@ -905,7 +1011,12 @@ const FOTO_EYE: Values = {
     pupil_size: 0.4,
     veins: 0.5,
 };
-const FOTO_LOOK: FaceLook = { flush: 0.45, lip: [0.86, 0.66, 0.66], lid: [0.74, 0.66, 0.6] };
+const FOTO_LOOK: FaceLook = {
+    flush: 0.45,
+    lip: [0.36, 0.17, 0.17],
+    lid: [0.74, 0.66, 0.6],
+    gloss: 0.12,
+};
 
 export const MATERIAL_SHOTS: Record<string, Shot> = {
     // A pele no rosto da malha base do MakeHuman.
@@ -918,6 +1029,9 @@ export const MATERIAL_SHOTS: Record<string, Shot> = {
     // contorno dos olhos acastanhado, a esclera cinza-bege e a íris quase preta.
     'pele-rosto-foto': faceShot(FOTO_SKIN, FOTO_EYE, false, false, FOTO_LOOK),
     'pele-rosto-foto-perto': faceShot(FOTO_SKIN, FOTO_EYE, true, false, FOTO_LOOK),
+    // O mesmo rosto com a iluminação global de perto. A cabeça de corpo mole (`{ soft: true }`) está escrita, mas a
+    // cena não chega a desenhar (esgota o prazo do gravador; causa em aberto) e por isso não está no catálogo.
+    'pele-rosto-gi': faceShot(FOTO_SKIN, FOTO_EYE, true, false, FOTO_LOOK, { bounce: true }),
     'pele-rosto-escura': faceShot(
         { melanin: 0.85, blood: 0.3, freckles: 0 },
         { iris_color: [0.16, 0.08, 0.03], iris_edge_color: [0.05, 0.025, 0.01] },
