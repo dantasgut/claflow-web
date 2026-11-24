@@ -506,7 +506,7 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
         back: ['glass', 'ice', 'porcelain', 'marble'],
         front: ['skin', 'wax', 'jade', 'milk'],
     },
-    organicos: { back: ['skinDetailed'], front: ['soap', 'ivory', 'motherOfPearl', 'snow'] },
+    organicos: { back: ['skinDetailed', 'eye'], front: ['soap', 'ivory', 'motherOfPearl', 'snow'] },
 };
 
 /**
