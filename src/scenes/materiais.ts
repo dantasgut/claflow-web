@@ -7,6 +7,7 @@ import {
     BoxGeometry,
     Camera,
     DirectionalLight,
+    EnvironmentMap,
     Displacements,
     FontLoader,
     GlobalIllumination,
@@ -27,6 +28,7 @@ import {
 import type { Application, MaterialFunction, MaterialName } from 'clayflow/web';
 import type { Shot } from './catalog';
 import { H, W } from './size';
+import { loadHdr } from './support/hdr';
 import { materialGraph } from './support/materialScenes';
 
 type Vec3 = readonly [number, number, number];
@@ -732,13 +734,21 @@ function face(app: Application, fn: MaterialFunction, iris: Values): Promise<voi
  * A cena do rosto: a luz principal de frente e de lado, com sombra, a contraluz por trás da orelha e os painéis do
  * estúdio (o reflexo nos olhos), a câmera orbitando; `close`: a câmera de perto, na altura dos olhos.
  */
-function faceShot(skin: Values, iris: Values = {}, close = false, hard = false): Shot {
+function faceShot(
+    skin: Values,
+    iris: Values = {},
+    close: boolean | 'eye' = false,
+    hard = false,
+): Shot {
     return {
         frames: GALLERY_FRAMES,
         warmup: WARMUP,
         build(app) {
-            const target: Vec3 = close ? [0, 0.72, 0.3] : [0, 0.8, 0];
-            const arm: Vec3 = close ? [0, 0.05, 2.1] : [0, 0.15, 4.6];
+            const at = FACE_EYES[1]!;
+            const target: Vec3 =
+                close === 'eye' ? [at[0], at[1] - 0.1, at[2]] : close ? [0, 0.72, 0.3] : [0, 0.8, 0];
+            const arm: Vec3 =
+                close === 'eye' ? [0, 0.02, 0.8] : close ? [0, 0.05, 2.1] : [0, 0.15, 4.6];
             const eye = (a: number): Vec3 => {
                 const r = turn(arm, a);
                 return [target[0] + r[0], target[1] + r[1], target[2] + r[2]];
@@ -754,10 +764,15 @@ function faceShot(skin: Values, iris: Values = {}, close = false, hard = false):
                     fov: 24 * DEG,
                     aspect: W / H,
                     aspectMode: 'fixed',
-                    near: 0.3,
+                    near: 0.1,
                     far: 60,
                 }).add(view),
             );
+            // A imagem do mundo (panorâmica HDR, Poly Haven, CC0), fraca e fora do fundo: o que a córnea e o óleo da
+            // pele refletem além das luzes.
+            void loadHdr(`${import.meta.env.BASE_URL}env/quarry_cloudy_1k.hdr`).then((img) => {
+                app.world.insert(new EnvironmentMap({ ...img, intensity: 0.04, background: false }));
+            });
             if (hard) {
                 // A luz dura de lado e a contraluz atrás da orelha, quase sem preenchimento: o terminador cruza o
                 // rosto e a luz atravessa a orelha — onde o espalhamento sob a pele aparece.
@@ -765,9 +780,12 @@ function faceShot(skin: Values, iris: Values = {}, close = false, hard = false):
                 directional(app, [0.9, 0.3, 0.45], 2.6, true);
                 directional(app, [-0.5, 0.3, -0.8], 1.3, true);
             } else {
-                // Os painéis a um terço (a luz de preenchimento e o reflexo nos olhos): a principal modela o rosto.
-                studio(app, 0.33);
-                directional(app, FACE_KEY, 2, true);
+                // As luzes de área não projetam sombra: sob elas o globo ocular, recuado sob a pálpebra e a
+                // sobrancelha, recebe a luz inteira e sai branco. Ficam fracas (o reflexo na córnea); quem ilumina
+                // são as direcionais, com sombra: a principal e um preenchimento do outro lado.
+                studio(app, 0.12);
+                directional(app, [0.7, 0.25, 0.65], 0.55, true);
+                directional(app, FACE_KEY, 2.6, true);
                 // A contraluz sem sombra: com ela a luz atravessaria as partes finas (a orelha), mas a espessura lida do mapa
                 // de sombra sai zero em manchas na borda do rosto (defeito em aberto; ver `pele-rosto-luz-dura`).
                 directional(app, FACE_BACK, 1.8);
@@ -780,7 +798,7 @@ function faceShot(skin: Values, iris: Values = {}, close = false, hard = false):
                         direction: [...aim, 0],
                         right: cross3(aim, [0, 1, 0]),
                         size: [1.2, 1.2],
-                        intensity: 8,
+                        intensity: 4,
                     }),
                 );
             }
@@ -866,6 +884,7 @@ export const MATERIAL_SHOTS: Record<string, Shot> = {
     'pele-rosto-luz-dura-sem': faceShot({ radius: [0, 0, 0] }, {}, true, true),
     'pele-rosto-luz-dura': faceShot({}, {}, true, true),
     'pele-rosto-perto': faceShot({}, {}, true),
+    'olho-perto': faceShot({}, {}, 'eye'),
     'pele-rosto-escura': faceShot(
         { melanin: 0.85, blood: 0.3, freckles: 0 },
         { iris_color: [0.16, 0.08, 0.03], iris_edge_color: [0.05, 0.025, 0.01] },
