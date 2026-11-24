@@ -11,6 +11,7 @@ import {
     FontLoader,
     GlobalIllumination,
     Materials,
+    MeshGeometry,
     nodes,
     ParametricSurface,
     PlaneGeometry,
@@ -543,7 +544,86 @@ function showcase(family: Showcase): Shot {
     };
 }
 
+// ── A pele num rosto: a malha base do MakeHuman (CC0) ───────────────────────────────────────────────────────────────
+/** Unidades por metro da cena do rosto: a cabeça de 26 cm com 1,6 unidade de altura. */
+const FACE_SCALE = 6.2;
+/** Abaixo desta altura (em decímetros, a unidade do arquivo) a malha é o corpo: fica a cabeça com o pescoço. */
+const FACE_NECK = 5.9;
+const FACE_KEY: Vec3 = [-0.55, 0.45, 0.7];
+const FACE_BACK: Vec3 = [0.75, 0.3, -0.6];
+
+/** A cabeça da malha base do MakeHuman, com o material `fn`; devolve quando entrou na cena. */
+function face(app: Application, fn: MaterialFunction): Promise<void> {
+    const k = FACE_SCALE / 10;
+    return fetch(`${import.meta.env.BASE_URL}models/makehuman-base.obj`)
+        .then((response) => {
+            if (!response.ok) throw new Error(`rosto: o modelo respondeu ${response.status}`);
+            return response.text();
+        })
+        .then((text) => {
+            app.world.insert(
+                MeshGeometry.fromObj(text, {
+                    groups: ['body'],
+                    scale: k,
+                    offset: [0, -FACE_NECK * k, -0.6 * k],
+                    keep: (_x, y) => y > 0,
+                })
+                    .add(new StandardMaterial())
+                    .add(new Transform({ position: [0, -0.1, 0, 1] }))
+                    .add(fn),
+            );
+        });
+}
+
+/** A cena do rosto: a luz principal de lado, com sombra, e a contraluz por trás da orelha, a câmera orbitando. */
+function faceShot(material: () => MaterialFunction): Shot {
+    return {
+        frames: GALLERY_FRAMES,
+        warmup: WARMUP,
+        build(app) {
+            const target: Vec3 = [0, 0.8, 0];
+            const arm: Vec3 = [0, 0.15, 4.6];
+            const eye = (a: number): Vec3 => {
+                const r = turn(arm, a);
+                return [target[0] + r[0], target[1] + r[1], target[2] + r[2]];
+            };
+            const from = eye(0);
+            const view = new Transform({
+                position: [...from, 1],
+                rotation: Transform.lookRotation([...from], [...target]),
+            });
+            app.world.insert(
+                new Camera({
+                    projection: 'perspective',
+                    fov: 24 * DEG,
+                    aspect: W / H,
+                    aspectMode: 'fixed',
+                    near: 0.5,
+                    far: 60,
+                }).add(view),
+            );
+            studio(app);
+            const key = directional(app, FACE_KEY, 1.5, true);
+            directional(app, FACE_BACK, 1.4);
+            backdrop(app, -0.1, 0.12);
+            void face(app, material());
+            return (i) => {
+                const t = i / (GALLERY_FRAMES - 1);
+                const p = eye(mix(-32, 32, t) * DEG);
+                view.data.position = [...p, 1];
+                view.data.rotation = Transform.lookRotation([...p], [...target]);
+                key.from(turn(FACE_KEY, mix(-25, 35, t) * DEG));
+            };
+        },
+    };
+}
+
 export const MATERIAL_SHOTS: Record<string, Shot> = {
+    // A pele no rosto da malha base do MakeHuman.
+    'pele-rosto': faceShot(() => Materials.skinDetailed({ scale: FACE_SCALE })),
+    'pele-rosto-escura': faceShot(() =>
+        Materials.skinDetailed({ scale: FACE_SCALE, melanin: 0.85, blood: 0.3, freckles: 0 }),
+    ),
     // A vitrine: `vitrine-<família>`, todos os materiais.
     ...Object.fromEntries(
         Object.entries(SHOWCASE).map(([name, family]) => [`vitrine-${name}`, showcase(family)]),
