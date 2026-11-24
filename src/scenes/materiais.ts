@@ -963,8 +963,10 @@ function faceShot(
                 // A luz dura de lado e a contraluz atrás da orelha, quase sem preenchimento: o terminador cruza o
                 // rosto e a luz atravessa a orelha — onde o espalhamento sob a pele aparece.
                 studio(app, 0.08);
-                directional(app, [0.9, 0.3, 0.45], 2.6, true);
+                // O motor atende uma luz com sombra só (a primeira): aqui é a contraluz, porque é do mapa de sombra dela
+                // que sai a espessura que a luz atravessa na orelha. A principal fica sem sombra.
                 directional(app, [-0.5, 0.3, -0.8], 1.3, true);
+                directional(app, [0.9, 0.3, 0.45], 2.6);
             } else {
                 // As luzes de área não projetam sombra: sob elas o globo ocular, recuado sob a pálpebra e a
                 // sobrancelha, recebe a luz inteira e sai branco. Ficam fracas (o reflexo na córnea); quem ilumina
