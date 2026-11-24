@@ -798,7 +798,8 @@ function face(app: Application, fn: MaterialFunction, iris: Values, soft = false
         app.world.insert(
             new ParametricSurface({
                 domain: [0, 1, 0, 1],
-                adaptive: { ...RELIEF_MESH, patches: [24, 24], periodic: [false, false] },
+                // Malha fixa: o globo é um objeto comum da cena; não pede malha refeita com a câmera.
+                resolution: [128, 128],
             })
                 .add(
                     new SurfaceFunction({
