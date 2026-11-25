@@ -553,6 +553,14 @@ const SHOWCASE_RELIEF: Partial<Record<MaterialName, NonNullable<Piece['displaced
     bark: { scale: BARK_SCALE, pattern: [1.5, 1.5] },
     barkPine: { scale: BARK_SCALE, pattern: [1.5, 1.5] },
     barkBirch: { scale: RELIEF_SCALE, pattern: [1, 1] },
+    // Os de peças: uma unidade do padrão é um metro — `scale` é o lado do uv da esfera (2,13) pelas repetições.
+    paverHerringbone: { scale: 0.43, pattern: [5, 5] },
+    concreteSlab: { scale: 0.43, pattern: [5, 5] },
+    stoneSetts: { scale: 0.43, pattern: [5, 5] },
+    stoneWall: { scale: 0.6, pattern: [3.5, 3.5] },
+    stackedSlate: { scale: 0.6, pattern: [3.5, 3.5] },
+    flagstone: { scale: 0.6, pattern: [3.5, 3.5] },
+    cobblestone: { scale: 0.6, pattern: [3.5, 3.5] },
 };
 
 /** As famílias da vitrine: todos os materiais da biblioteca, cada um numa cena. */
