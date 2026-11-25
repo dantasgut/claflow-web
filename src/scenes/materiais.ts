@@ -19,6 +19,7 @@ import {
     SetGraph,
     ParametricSurface,
     PlaneGeometry,
+    Bloom,
     RectLight,
     Sky,
     SoftBody,
@@ -483,10 +484,26 @@ interface Showcase {
      * espelho reflete onde não há painel), o tom do chão e do fundo e a intensidade da luz direcional (os realces
      * vivos, as cáusticas).
      */
-    readonly tent?: { readonly gain: number; readonly ambient: number; readonly floor: number; readonly sun: number };
+    readonly tent?: {
+        readonly gain: number;
+        readonly ambient: number;
+        readonly floor: number;
+        readonly sun: number;
+        /** A luminância das luzes pequenas dos realces e a fração da energia espalhada pela lente. */
+        readonly spark: number;
+        readonly glare: number;
+    };
     /** As peças lapidadas (o corte brilhante no lugar da esfera): o brilho de uma gema é das facetas. */
     readonly cut?: readonly MaterialName[];
 }
+
+/** As luzes pequenas dos realces da tenda: quatro pontos altos em volta das peças. */
+const TENT_SPARKS: readonly Vec3[] = [
+    [-2.4, 3.6, 2.8],
+    [2.6, 4.1, 1.6],
+    [0.4, 4.6, -2.2],
+    [-3.1, 3.1, -0.8],
+];
 
 /**
  * O corte brilhante redondo, de facetas planas (cada triângulo com os seus vértices e a normal da face): a mesa
@@ -583,7 +600,7 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
     metais: {
         back: ['gold', 'goldMatte', 'silver', 'silverMatte'],
         front: ['copper', 'brass', 'chrome', 'metalPolished'],
-        tent: { gain: 1.2, ambient: 0.16, floor: 0.3, sun: 2 },
+        tent: { gain: 1.2, ambient: 0.16, floor: 0.3, sun: 2, spark: 500, glare: 0.14 },
     },
     'metais-lavrados': {
         back: ['aluminiumAnodized', 'metalBrushed'],
@@ -631,19 +648,19 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
         back: ['glassGreen', 'glassBlue', 'glassAmber', 'glassFrosted'],
         front: ['crystal', 'obsidian', 'amber'],
         cut: ['crystal'],
-        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6 },
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.14 },
     },
     gemas: {
         back: ['diamond', 'ruby', 'sapphire', 'emerald'],
         front: ['aquamarine', 'topaz', 'garnet', 'peridot'],
         cut: ['diamond', 'ruby', 'sapphire', 'emerald', 'aquamarine', 'topaz', 'garnet', 'peridot'],
-        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6 },
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.14 },
     },
     cristais: {
         back: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
         front: ['turquoise', 'lapisLazuli', 'malachite', 'opal', 'onyx'],
         cut: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
-        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6 },
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.14 },
     },
     alvenaria: {
         back: ['concreteBlock', 'stoneWall', 'stackedSlate', 'gravel'],
@@ -665,7 +682,24 @@ function showcase(family: Showcase): Shot {
             const move = galleryCamera(app, 1.17);
             const tent = family.tent;
             const lights = studio(app, tent?.gain ?? 1);
-            if (tent !== undefined) app.defaults.ambient.data.intensity = tent.ambient;
+            if (tent !== undefined) {
+                app.defaults.ambient.data.intensity = tent.ambient;
+                // Os realces vivos: luzes pequenas e muito fortes (o ponto de luz no metal polido, a faísca na faceta) e
+                // o espalhamento da lente, que faz o clarão em volta do que é muito mais forte que o resto da imagem.
+                for (const at of TENT_SPARKS) {
+                    const aim = unit3(sub3(GALLERY_PANEL_TARGET, at));
+                    app.world.insert(
+                        new RectLight({
+                            position: [...at, 1],
+                            direction: [...aim, 0],
+                            right: cross3(aim, [0, 1, 0]),
+                            size: [0.22, 0.22],
+                            intensity: tent.spark,
+                        }),
+                    );
+                }
+                app.defaults.post.addEffect(new Bloom({ strength: tent.glare }));
+            }
             directional(app, GALLERY_SUN, tent?.sun ?? 1.5, true);
             backdrop(app, -0.1, tent?.floor ?? 0.12);
             const text = overlay(app);
