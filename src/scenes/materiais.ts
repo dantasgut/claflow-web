@@ -779,6 +779,9 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
         scale: FACE_SCALE,
         color: [...look.lip],
         gloss: look.gloss,
+        // Os vincos em leque, curvos, a partir do meio da boca.
+        centre: [...facePoint(0, 6.6, 1.58)],
+        fan: 140,
     });
     graph.face = nodes.closure.mix;
     links.push(
