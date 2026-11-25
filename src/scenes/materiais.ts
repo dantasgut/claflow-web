@@ -117,7 +117,11 @@ function galleryValues(name: MaterialName, pattern: readonly [number, number], r
     const params = nodes.material[name].params;
     const scale = 'radius' in params ? GALLERY_SCALE : RELIEF_SCALE;
     return {
-        ...('pattern_scale' in params ? { pattern_scale: [...pattern] } : {}),
+        // As repetições no uv (dois números) só nos padrões de superfície; os maciços (`pattern_scale` de um número: por
+        // unidade do objeto) ficam com o valor próprio.
+        ...('pattern_scale' in params && params.pattern_scale.type !== 'f32'
+            ? { pattern_scale: [...pattern] }
+            : {}),
         ...('scale' in params ? { scale } : {}),
         // Uma unidade do padrão em metros (os flocos da pintura): meia volta da esfera, a 5,5 unidades por metro.
         ...('pattern_size' in params ? { pattern_size: (Math.PI * radius) / RELIEF_SCALE } : {}),
@@ -917,7 +921,7 @@ function softFace(mesh: MeshGeometry): SoftBody {
 function faceShot(
     skin: Values,
     iris: Values = {},
-    close: boolean | 'eye' = false,
+    close: boolean | 'eye' | 'mouth' = false,
     hard = false,
     look: FaceLook = FACE_ROSY,
     /** `bounce`: a iluminação global com a coleta na tela (a luz rebatida de perto); `soft`: a cabeça de corpo mole. */
@@ -928,10 +932,21 @@ function faceShot(
         warmup: WARMUP,
         build(app) {
             const at = FACE_EYES[1]!;
+            const mouth = facePoint(0, 6.6, 1.58);
             const target: Vec3 =
-                close === 'eye' ? [at[0], at[1] - 0.1, at[2]] : close ? [0, 0.72, 0.3] : [0, 0.8, 0];
+                close === 'eye'
+                    ? [at[0], at[1] - 0.1, at[2]]
+                    : close === 'mouth'
+                      ? [mouth[0], mouth[1] - 0.1, mouth[2]]
+                      : close
+                        ? [0, 0.72, 0.3]
+                        : [0, 0.8, 0];
             const arm: Vec3 =
-                close === 'eye' ? [0, 0.02, 0.8] : close ? [0, 0.05, 2.1] : [0, 0.15, 4.6];
+                close === 'eye' || close === 'mouth'
+                    ? [0, 0.02, 0.8]
+                    : close
+                      ? [0, 0.05, 2.1]
+                      : [0, 0.15, 4.6];
             const eye = (a: number): Vec3 => {
                 const r = turn(arm, a);
                 return [target[0] + r[0], target[1] + r[1], target[2] + r[2]];
@@ -1109,6 +1124,7 @@ export const MATERIAL_SHOTS: Record<string, Shot> = {
     'pele-rosto-luz-dura': faceShot({}, {}, true, true),
     'pele-rosto-perto': faceShot({}, {}, true),
     'olho-perto': faceShot({}, {}, 'eye'),
+    'boca-perto': faceShot({}, {}, 'mouth'),
     // A pele pela foto de um rosto real: mais escura e oliva, pouca vermelhidão, o brilho largo, os lábios apagados, o
     // contorno dos olhos acastanhado, a esclera cinza-bege e a íris quase preta.
     'pele-rosto-foto': faceShot(FOTO_SKIN, FOTO_EYE, false, false, FOTO_LOOK),
