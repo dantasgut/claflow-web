@@ -476,6 +476,8 @@ const hsv = (h: number, s: number, v: number): number[] => {
 interface Showcase {
     readonly back: readonly MaterialName[];
     readonly front: readonly MaterialName[];
+    /** As repetições do padrão no uv (sem: as da galeria) — os desenhos de metro, grandes demais na esfera. */
+    readonly pattern?: readonly [number, number];
 }
 
 /** As peças da vitrine com o relevo na geometria (as outras: a esfera pronta, o relevo na normal). */
@@ -488,7 +490,7 @@ const SHOWCASE_RELIEF: Partial<Record<MaterialName, NonNullable<Piece['displaced
     barkBirch: { scale: RELIEF_SCALE, pattern: [1, 1] },
 };
 
-/** As famílias da vitrine: os 75 materiais da biblioteca, cada um numa cena. */
+/** As famílias da vitrine: todos os materiais da biblioteca, cada um numa cena. */
 const SHOWCASE: Readonly<Record<string, Showcase>> = {
     metais: {
         back: ['gold', 'copper', 'brass', 'chrome'],
@@ -527,6 +529,16 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
         front: ['skin', 'wax', 'jade', 'milk'],
     },
     organicos: { back: ['skinDetailed', 'eye', 'lips'], front: ['soap', 'ivory', 'motherOfPearl', 'snow'] },
+    pavimentos: {
+        back: ['asphaltFine', 'asphaltCoarse', 'asphaltCracked', 'concreteSlab'],
+        front: ['pavementPortuguese', 'grassPaver', 'paverHerringbone', 'stoneSetts'],
+        pattern: [6, 3],
+    },
+    alvenaria: {
+        back: ['concreteBlock', 'stoneWall', 'stackedSlate'],
+        front: ['flagstone', 'cobblestone', 'bamboo'],
+        pattern: [4, 2],
+    },
 };
 
 /**
@@ -550,6 +562,9 @@ function showcase(family: Showcase): Shot {
                     name: name as MaterialName,
                     at: c,
                     radius: R,
+                    ...(family.pattern !== undefined
+                        ? { values: { pattern_scale: [...family.pattern] } }
+                        : {}),
                     ...(displaced !== undefined ? { displaced, front: true } : {}),
                 });
                 text.label(name, anchor(c, R));
