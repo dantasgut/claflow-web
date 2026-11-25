@@ -4,6 +4,7 @@ import type { MaterialName, NodeDefinition } from 'clayflow/web';
 import { H, W } from './scenes/size';
 import { MATERIAL_FAMILIES, materialStage, type MaterialStage } from './scenes/materiais';
 import { FpsCounter } from './ScenePanel';
+import { FrameSizeControl } from './FrameSize';
 import { heading, panel, type GraphEdit, type Param, type Value } from './MaterialNodes';
 import { MaterialWorkbench, type ActiveMaterial } from './MaterialWorkbench';
 import { HideButton, PanelTab, usePanel } from './panels';
@@ -123,6 +124,7 @@ export function MaterialGallery({ name }: { readonly name: MaterialName }) {
                         </a>
                         <HideButton onClick={() => setList(false)} />
                     </div>
+                    <FrameSizeControl />
                     {MATERIAL_FAMILIES.map(([family, names]) => (
                         <div key={family}>
                             <div style={heading}>{family}</div>

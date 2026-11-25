@@ -676,19 +676,19 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
         back: ['glassGreen', 'glassBlue', 'glassAmber', 'glassFrosted'],
         front: ['crystal', 'obsidian', 'amber'],
         cut: ['crystal'],
-        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05, crisp: true },
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05 },
     },
     gemas: {
         back: ['diamond', 'ruby', 'sapphire', 'emerald'],
         front: ['aquamarine', 'topaz', 'garnet', 'peridot'],
         cut: ['diamond', 'ruby', 'sapphire', 'emerald', 'aquamarine', 'topaz', 'garnet', 'peridot'],
-        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05, crisp: true },
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05 },
     },
     cristais: {
         back: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
         front: ['turquoise', 'lapisLazuli', 'malachite', 'opal', 'onyx'],
         cut: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
-        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05, crisp: true },
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05 },
     },
     alvenaria: {
         back: ['concreteBlock', 'stoneWall', 'stackedSlate', 'gravel'],

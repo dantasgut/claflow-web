@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import * as clayflow from 'clayflow/web';
 import type { Application } from 'clayflow/web';
+import { FrameSizeControl } from './FrameSize';
 import { usePanel } from './panels';
 
 /** A taxa de quadros (canto superior direito): os quadros completos no último segundo. */
@@ -216,6 +217,7 @@ export function ScenePanel({ app }: { readonly app: Application }) {
                             )}
                         </Section>
                         <Section title="Imagem">
+                            <FrameSizeControl />
                             <Slider
                                 label="exposição (EV, + a da cena)"
                                 min={-4}
