@@ -621,7 +621,17 @@ const FACE_ROSY: FaceLook = {
 };
 
 /** A forma dos lábios no rosto (unidades do objeto) e os valores do relevo deles, comuns ao material e à geometria. */
-const LIP_SHAPE = { reach: 0.162, up: 0.08, down: 0.086, soft: 0.55, bow: { dip: 0.2, half: 0.045 } };
+// Medida na malha da cabeça: o degrau debaixo do lábio inferior fica 0,069 abaixo do meio da boca e a borda de cima
+// 0,080 acima (0,064 no meio: o arco do cupido), e os dois contornos fecham para o canto como 1 − u^3,4 (u a fração da
+// meia largura) — mais cheios que uma parábola. A máscara vale 1 até `soft` da altura e 0 no fim dela.
+const LIP_SHAPE = {
+    reach: 0.162,
+    up: 0.086,
+    down: 0.08,
+    soft: 0.82,
+    power: 3.4,
+    bow: { dip: 0.2, half: 0.05 },
+};
 const LIP_RELIEF = {
     scale: FACE_SCALE,
     // Os vincos em leque, curvos, a partir do meio da boca.
@@ -649,7 +659,8 @@ function lipLens(graph: Record<string, unknown>, links: [string, string][], posi
     graph.lip_ay = nodes.math.abs;
     graph.lip_reach = nodes.math.value.with({ value: lipShape.reach });
     graph.lip_u = nodes.math.div;
-    graph.lip_u2 = nodes.math.mul;
+    graph.lip_power = nodes.math.value.with({ value: lipShape.power });
+    graph.lip_u2 = nodes.math.pow;
     graph.lip_taper = nodes.map.range.with({ in_min: 1, in_max: 0, out_min: 1e-4, out_max: 1 });
     graph.lip_bow = nodes.map.range.with({
         in_min: lipShape.bow.half,
@@ -677,8 +688,8 @@ function lipLens(graph: Record<string, unknown>, links: [string, string][], posi
         ['lip_axes.y', 'lip_ay.x'],
         ['lip_ax.value', 'lip_u.a'],
         ['lip_reach.value', 'lip_u.b'],
-        ['lip_u.value', 'lip_u2.a'],
-        ['lip_u.value', 'lip_u2.b'],
+        ['lip_u.value', 'lip_u2.x'],
+        ['lip_power.value', 'lip_u2.e'],
         ['lip_u2.value', 'lip_taper.x'],
         ['lip_ax.value', 'lip_bow.x'],
         ['lip_axes.y', 'lip_above.x'],
@@ -948,7 +959,7 @@ function displacedFace(mesh: MeshGeometry): SetGraph {
     const fine = mesh.refined(LIP_LEVELS, (x, y, z) => {
         const u = Math.abs(x) / (LIP_SHAPE.reach * 1.05);
         if (u >= 1 || z - centre[2] < -0.2) return false;
-        const tall = (y > centre[1] ? LIP_SHAPE.up : LIP_SHAPE.down) * 1.1 * (1 - u * u);
+        const tall = (y > centre[1] ? LIP_SHAPE.up : LIP_SHAPE.down) * 1.15 * (1 - u ** LIP_SHAPE.power);
         return Math.abs(y - centre[1]) < tall;
     });
     const graph: Record<string, unknown> = {
