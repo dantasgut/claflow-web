@@ -478,6 +478,71 @@ interface Showcase {
     readonly front: readonly MaterialName[];
     /** As repetições do padrão no uv (sem: as da galeria) — os desenhos de metro, grandes demais na esfera. */
     readonly pattern?: readonly [number, number];
+    /** As peças lapidadas (o corte brilhante no lugar da esfera): o brilho de uma gema é das facetas. */
+    readonly cut?: readonly MaterialName[];
+}
+
+/**
+ * O corte brilhante redondo, de facetas planas (cada triângulo com os seus vértices e a normal da face): a mesa
+ * octogonal (53 % do diâmetro), a coroa de 24 facetas (ângulo de 34,5°: altura de 16,2 % do diâmetro), a cintura de 16
+ * lados e o pavilhão de 16 facetas até a culaça (40,75°: profundidade de 43,1 %) — as proporções de Tolkowsky.
+ */
+function brilliant(radius: number): MeshGeometry {
+    const table = Array.from({ length: 8 }, (_, i): Vec3 => {
+        const a = (i * Math.PI) / 4;
+        return [0.53 * Math.cos(a), 0.324, 0.53 * Math.sin(a)];
+    });
+    const girdle = Array.from({ length: 16 }, (_, j): Vec3 => {
+        const a = (j * Math.PI) / 8;
+        return [Math.cos(a), 0, Math.sin(a)];
+    });
+    const top: Vec3 = [0, 0.324, 0];
+    const culet: Vec3 = [0, -0.862, 0];
+    const faces: [Vec3, Vec3, Vec3][] = [];
+    for (let i = 0; i < 8; i++) {
+        const t = table[i]!;
+        const next = table[(i + 1) % 8]!;
+        const g = (k: number): Vec3 => girdle[(2 * i + k + 16) % 16]!;
+        faces.push([top, t, next], [t, g(-1), g(0)], [t, g(0), g(1)], [t, g(1), next]);
+    }
+    for (let j = 0; j < 16; j++) faces.push([girdle[j]!, girdle[(j + 1) % 16]!, culet]);
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const indices: number[] = [];
+    const inside: Vec3 = [0, -0.2, 0];
+    for (const [a, b, c] of faces) {
+        let n = unit3(cross3(sub3(b, a), sub3(c, a)));
+        const out = sub3(a, inside);
+        const flip = n[0] * out[0] + n[1] * out[1] + n[2] * out[2] < 0;
+        if (flip) n = [-n[0], -n[1], -n[2]];
+        const k = positions.length / 3;
+        for (const p of flip ? [a, c, b] : [a, b, c]) {
+            positions.push(p[0] * radius, p[1] * radius, p[2] * radius);
+            normals.push(n[0], n[1], n[2]);
+        }
+        indices.push(k, k + 1, k + 2);
+    }
+    return new MeshGeometry({
+        positions: new Float32Array(positions),
+        indices: new Uint32Array(indices),
+        normals: new Float32Array(normals),
+    });
+}
+
+/** Põe uma gema lapidada na cena: a mesa inclinada para a câmera, a culaça acima do chão. */
+function gem(app: Application, name: MaterialName, at: Vec3, radius: number): void {
+    const lean = 0.5;
+    app.world.insert(
+        brilliant(radius)
+            .add(new StandardMaterial())
+            .add(
+                new Transform({
+                    position: [at[0], at[1] + 0.2 * radius, at[2], 1],
+                    rotation: [Math.sin(lean / 2), 0, 0, Math.cos(lean / 2)],
+                }),
+            )
+            .add(Materials[name](galleryValues(name, [2, 1], radius))),
+    );
 }
 
 /** As peças da vitrine com o relevo na geometria (as outras: a esfera pronta, o relevo na normal). */
@@ -493,7 +558,7 @@ const SHOWCASE_RELIEF: Partial<Record<MaterialName, NonNullable<Piece['displaced
 /** As famílias da vitrine: todos os materiais da biblioteca, cada um numa cena. */
 const SHOWCASE: Readonly<Record<string, Showcase>> = {
     metais: {
-        back: ['gold', 'copper', 'brass', 'chrome'],
+        back: ['gold', 'silver', 'copper', 'brass', 'chrome'],
         front: ['aluminiumAnodized', 'metalPolished', 'metalBrushed', 'metalHammered'],
     },
     'metais-acabados': {
@@ -534,6 +599,21 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
         front: ['pavementPortuguese', 'grassPaver', 'paverHerringbone', 'stoneSetts'],
         pattern: [6, 3],
     },
+    vidros: {
+        back: ['glassGreen', 'glassBlue', 'glassAmber', 'glassFrosted'],
+        front: ['crystal', 'obsidian', 'amber'],
+        cut: ['crystal'],
+    },
+    gemas: {
+        back: ['diamond', 'ruby', 'sapphire', 'emerald'],
+        front: ['aquamarine', 'topaz', 'garnet', 'peridot'],
+        cut: ['diamond', 'ruby', 'sapphire', 'emerald', 'aquamarine', 'topaz', 'garnet', 'peridot'],
+    },
+    cristais: {
+        back: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
+        front: ['turquoise', 'lapisLazuli', 'malachite', 'opal', 'onyx'],
+        cut: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
+    },
     alvenaria: {
         back: ['concreteBlock', 'stoneWall', 'stackedSlate', 'gravel'],
         front: ['flagstone', 'cobblestone', 'bamboo'],
@@ -558,6 +638,11 @@ function showcase(family: Showcase): Shot {
             const text = overlay(app);
             for (const [name, c] of rows(family.back, family.front, R, 1.45)) {
                 const displaced = SHOWCASE_RELIEF[name as MaterialName];
+                if (family.cut?.includes(name as MaterialName) === true) {
+                    gem(app, name as MaterialName, c, R);
+                    text.label(name, anchor(c, R));
+                    continue;
+                }
                 ball(app, {
                     name: name as MaterialName,
                     at: c,
