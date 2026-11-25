@@ -298,11 +298,80 @@ function Control({
     );
 }
 
+const show = (v: Value | undefined): string =>
+    v === undefined ? '—' : Array.isArray(v) ? `(${v.map((c) => Number(c.toFixed(4))).join(', ')})` : String(v);
+
+/**
+ * O painel de um nó do grafo: todos os parâmetros da definição dele com o valor em uso (o que o grafo deu, ou o padrão
+ * do nó), o que está ligado a outro nó e o que o material expõe; as entradas e as saídas com o tipo.
+ */
+function NodeParams({
+    box,
+    links,
+    exposed,
+}: {
+    readonly box: Box;
+    readonly links: readonly { from: string; to: string; port: string }[];
+    readonly exposed: ReadonlyMap<string, string>;
+}) {
+    const linked = new Map(
+        links
+            .filter((l) => l.to === box.id)
+            .map((l) => [l.port.split(' → ')[1] ?? '', `${l.from}.${l.port.split(' → ')[0] ?? ''}`]),
+    );
+    const names = [...new Set([...Object.keys(box.params), ...Object.keys(box.inputs)])];
+    const cell: React.CSSProperties = { padding: '1px 8px 1px 0', verticalAlign: 'top' };
+    return (
+        <div style={{ marginTop: 6 }}>
+            {names.length === 0 ? (
+                <div style={{ color: '#888' }}>nó sem parâmetros</div>
+            ) : (
+                <table style={{ borderCollapse: 'collapse' }}>
+                    <tbody>
+                        {names.map((k) => {
+                            const p = box.params[k];
+                            const set = k in box.values;
+                            const from = linked.get(k);
+                            const name = exposed.get(`${box.id}.${k}`);
+                            return (
+                                <tr key={k}>
+                                    <td style={{ ...cell, color: '#e6e6ee' }}>{k}</td>
+                                    <td style={{ ...cell, color: '#777' }}>{p?.type ?? box.inputs[k]}</td>
+                                    <td style={{ ...cell, color: from !== undefined ? '#8ec7ff' : set ? '#f0d28a' : '#b8b8c8' }}>
+                                        {from !== undefined
+                                            ? `← ${from}`
+                                            : p === undefined
+                                              ? 'entrada sem ligação'
+                                              : `${show(box.values[k] ?? p.default)}${set ? '' : ' (padrão)'}`}
+                                    </td>
+                                    <td style={{ ...cell, color: '#9bd29b' }}>
+                                        {name !== undefined ? `exposto: ${name}` : ''}
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            )}
+            <div style={{ color: '#888', marginTop: 4 }}>
+                saídas:{' '}
+                {Object.entries(box.outputs)
+                    .map(([k, t]) => `${k}: ${t}`)
+                    .join(' · ') || '—'}
+            </div>
+        </div>
+    );
+}
+
 interface Box {
     readonly id: string;
     readonly kind: string;
     readonly inner: NodeDefinition | undefined;
     readonly values: Readonly<Record<string, Value>>;
+    /** Os parâmetros, as entradas e as saídas da definição do nó (o painel do nó mostra todos). */
+    readonly params: Readonly<Record<string, Param>>;
+    readonly inputs: Readonly<Record<string, string>>;
+    readonly outputs: Readonly<Record<string, string>>;
     x: number;
     y: number;
 }
@@ -338,8 +407,12 @@ function GraphView({ root, lit }: { readonly root: NodeDefinition; readonly lit:
             boxes.set(id, {
                 id,
                 kind: d.kind,
-                inner: d.inner !== undefined && subgraphOrigin(d.inner) !== undefined ? d.inner : undefined,
+                inner:
+                    d.inner !== undefined && subgraphOrigin(d.inner) !== undefined ? d.inner : undefined,
                 values: d.values,
+                params: (d.inner?.params ?? {}) as Readonly<Record<string, Param>>,
+                inputs: (d.inner?.inputs ?? {}) as Readonly<Record<string, string>>,
+                outputs: (d.inner?.outputs ?? {}) as Readonly<Record<string, string>>,
                 x: 0,
                 y: 0,
             });
@@ -376,6 +449,14 @@ function GraphView({ root, lit }: { readonly root: NodeDefinition; readonly lit:
             height = Math.max(height, column.length * (BOX_H + GAP_Y));
         }
         return { boxes, links, width: columns.size * (BOX_W + GAP_X), height };
+    }, [shown]);
+    // Os parâmetros internos que o sub-grafo expõe: `nó.parâmetro` → o nome exposto.
+    const exposed = useMemo(() => {
+        const expose = (subgraphOrigin(shown) as { expose?: readonly (readonly [string, string] | string)[] } | undefined)
+            ?.expose;
+        return new Map(
+            (expose ?? []).map((e) => (typeof e === 'string' ? [e, e.split('.')[1] ?? e] : [e[0], e[1]])),
+        );
     }, [shown]);
     if (layout === undefined) return <p>Sem grafo.</p>;
     const chosen = picked === null ? undefined : layout.boxes.get(picked);
@@ -467,13 +548,7 @@ function GraphView({ root, lit }: { readonly root: NodeDefinition; readonly lit:
                             abrir sub-grafo
                         </button>
                     )}
-                    <div style={{ color: '#b8b8c8', marginTop: 4 }}>
-                        {Object.entries(chosen.values).length === 0
-                            ? 'valores padrão do nó'
-                            : Object.entries(chosen.values)
-                                  .map(([k, v]) => `${k} = ${Array.isArray(v) ? `(${v.join(', ')})` : String(v)}`)
-                                  .join(' · ')}
-                    </div>
+                    <NodeParams box={chosen} links={layout.links} exposed={exposed} />
                     <div style={{ color: '#888', marginTop: 4 }}>
                         {layout.links
                             .filter((l) => l.from === chosen.id || l.to === chosen.id)

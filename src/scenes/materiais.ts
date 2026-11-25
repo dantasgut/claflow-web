@@ -478,6 +478,12 @@ interface Showcase {
     readonly front: readonly MaterialName[];
     /** As repetições do padrão no uv (sem: as da galeria) — os desenhos de metro, grandes demais na esfera. */
     readonly pattern?: readonly [number, number];
+    /**
+     * A tenda de luz dos metais e das gemas (sem: o estúdio cinza): o ganho dos painéis, a luz do ambiente (o que o
+     * espelho reflete onde não há painel), o tom do chão e do fundo e a intensidade da luz direcional (os realces
+     * vivos, as cáusticas).
+     */
+    readonly tent?: { readonly gain: number; readonly ambient: number; readonly floor: number; readonly sun: number };
     /** As peças lapidadas (o corte brilhante no lugar da esfera): o brilho de uma gema é das facetas. */
     readonly cut?: readonly MaterialName[];
 }
@@ -561,13 +567,27 @@ const SHOWCASE_RELIEF: Partial<Record<MaterialName, NonNullable<Piece['displaced
     stackedSlate: { scale: 0.6, pattern: [3.5, 3.5] },
     flagstone: { scale: 0.6, pattern: [3.5, 3.5] },
     cobblestone: { scale: 0.6, pattern: [3.5, 3.5] },
+    gravel: { scale: 1.6, pattern: [1.3, 1.3] },
+    bamboo: { scale: 0.85, pattern: [2.5, 2.5] },
+};
+
+/** As repetições do padrão das peças vistas de perto (o grão do asfalto some na escala da família). */
+const SHOWCASE_PATTERN: Partial<Record<MaterialName, readonly [number, number]>> = {
+    asphaltFine: [0.6, 0.3],
+    asphaltCoarse: [1.6, 0.8],
+    asphaltCracked: [1.6, 0.8],
 };
 
 /** As famílias da vitrine: todos os materiais da biblioteca, cada um numa cena. */
 const SHOWCASE: Readonly<Record<string, Showcase>> = {
     metais: {
-        back: ['gold', 'silver', 'copper', 'brass', 'chrome'],
-        front: ['aluminiumAnodized', 'metalPolished', 'metalBrushed', 'metalHammered'],
+        back: ['gold', 'goldMatte', 'silver', 'silverMatte'],
+        front: ['copper', 'brass', 'chrome', 'metalPolished'],
+        tent: { gain: 1.2, ambient: 0.16, floor: 0.3, sun: 2 },
+    },
+    'metais-lavrados': {
+        back: ['aluminiumAnodized', 'metalBrushed'],
+        front: ['metalHammered'],
     },
     'metais-acabados': {
         back: ['castIron', 'bronzePatina', 'metalOxidized', 'carbonFiber'],
@@ -611,16 +631,19 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
         back: ['glassGreen', 'glassBlue', 'glassAmber', 'glassFrosted'],
         front: ['crystal', 'obsidian', 'amber'],
         cut: ['crystal'],
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6 },
     },
     gemas: {
         back: ['diamond', 'ruby', 'sapphire', 'emerald'],
         front: ['aquamarine', 'topaz', 'garnet', 'peridot'],
         cut: ['diamond', 'ruby', 'sapphire', 'emerald', 'aquamarine', 'topaz', 'garnet', 'peridot'],
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6 },
     },
     cristais: {
         back: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
         front: ['turquoise', 'lapisLazuli', 'malachite', 'opal', 'onyx'],
         cut: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6 },
     },
     alvenaria: {
         back: ['concreteBlock', 'stoneWall', 'stackedSlate', 'gravel'],
@@ -640,9 +663,11 @@ function showcase(family: Showcase): Shot {
         build(app) {
             const R = 0.6;
             const move = galleryCamera(app, 1.17);
-            const lights = studio(app);
-            directional(app, GALLERY_SUN, 1.5, true);
-            backdrop(app, -0.1, 0.12);
+            const tent = family.tent;
+            const lights = studio(app, tent?.gain ?? 1);
+            if (tent !== undefined) app.defaults.ambient.data.intensity = tent.ambient;
+            directional(app, GALLERY_SUN, tent?.sun ?? 1.5, true);
+            backdrop(app, -0.1, tent?.floor ?? 0.12);
             const text = overlay(app);
             for (const [name, c] of rows(family.back, family.front, R, 1.45)) {
                 const displaced = SHOWCASE_RELIEF[name as MaterialName];
@@ -655,9 +680,11 @@ function showcase(family: Showcase): Shot {
                     name: name as MaterialName,
                     at: c,
                     radius: R,
-                    ...(family.pattern !== undefined
-                        ? { values: { pattern_scale: [...family.pattern] } }
-                        : {}),
+                    ...(SHOWCASE_PATTERN[name as MaterialName] !== undefined
+                        ? { values: { pattern_scale: [...SHOWCASE_PATTERN[name as MaterialName]!] } }
+                        : family.pattern !== undefined
+                          ? { values: { pattern_scale: [...family.pattern] } }
+                          : {}),
                     ...(displaced !== undefined ? { displaced, front: true } : {}),
                 });
                 text.label(name, anchor(c, R));
