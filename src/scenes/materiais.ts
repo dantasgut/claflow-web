@@ -671,7 +671,58 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
     const earL = blob('ear_l', facePoint(0.85, 7.2, 0.35), 0.06, 0.26);
     const earR = blob('ear_r', facePoint(-0.85, 7.2, 0.35), 0.06, 0.26);
     const brow = blob('brow', facePoint(0, 7.85, 1.4), 0.1, 0.42);
-    const lips = blob('lips', facePoint(0, 6.6, 1.58), 0.13, 0.19, [1, 3.1, 1]);
+    // Os lábios: uma lente em volta da linha da boca — a meia altura cai em parábola do meio (`up` acima, `down`
+    // abaixo) a zero nos cantos (`reach`, a meia largura): o material afina até o canto da boca.
+    const lipShape = { reach: 0.162, up: 0.076, down: 0.086, soft: 0.55 };
+    graph.lip_c = nodes.math.value3.with({ value: [...facePoint(0, 6.6, 1.58)] });
+    graph.lip_rel = nodes.math.sub3;
+    graph.lip_axes = nodes.math.split3;
+    graph.lip_ax = nodes.math.abs;
+    graph.lip_ay = nodes.math.abs;
+    graph.lip_reach = nodes.math.value.with({ value: lipShape.reach });
+    graph.lip_u = nodes.math.div;
+    graph.lip_u2 = nodes.math.mul;
+    graph.lip_taper = nodes.map.range.with({ in_min: 1, in_max: 0, out_min: 1e-4, out_max: 1 });
+    graph.lip_tall = nodes.map.range.with({
+        in_min: -0.003,
+        in_max: 0.003,
+        out_min: lipShape.down,
+        out_max: lipShape.up,
+    });
+    graph.lip_h = nodes.math.mul;
+    graph.lip_t = nodes.math.div;
+    graph.lip_in = nodes.map.range.with({ in_min: 1, in_max: lipShape.soft, out_min: 0, out_max: 1 });
+    // Só a frente da cabeça (a lente é um prisma ao longo de z).
+    graph.lip_front = nodes.map.range.with({ in_min: -0.3, in_max: -0.2, out_min: 0, out_max: 1 });
+    // A ponta some aos poucos no canto.
+    graph.lip_end = nodes.map.range.with({ in_min: 1, in_max: 0.7, out_min: 0, out_max: 1 });
+    graph.lip_body = nodes.math.mul;
+    graph.lips = nodes.math.mul;
+    links.push(
+        ['s.object_position', 'lip_rel.a'],
+        ['lip_c.value', 'lip_rel.b'],
+        ['lip_rel.value', 'lip_axes.v'],
+        ['lip_axes.x', 'lip_ax.x'],
+        ['lip_axes.y', 'lip_ay.x'],
+        ['lip_ax.value', 'lip_u.a'],
+        ['lip_reach.value', 'lip_u.b'],
+        ['lip_u.value', 'lip_u2.a'],
+        ['lip_u.value', 'lip_u2.b'],
+        ['lip_u2.value', 'lip_taper.x'],
+        ['lip_axes.y', 'lip_tall.x'],
+        ['lip_tall.value', 'lip_h.a'],
+        ['lip_taper.value', 'lip_h.b'],
+        ['lip_ay.value', 'lip_t.a'],
+        ['lip_h.value', 'lip_t.b'],
+        ['lip_t.value', 'lip_in.x'],
+        ['lip_axes.z', 'lip_front.x'],
+        ['lip_u2.value', 'lip_end.x'],
+        ['lip_in.value', 'lip_body.a'],
+        ['lip_end.value', 'lip_body.b'],
+        ['lip_body.value', 'lips.a'],
+        ['lip_front.value', 'lips.b'],
+    );
+    const lips = 'lips.value';
     // O contorno dos olhos: a pele fina das pálpebras, mais vermelha e mais escura.
     const socketL = blob('socket_l', facePoint(0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
     const socketR = blob('socket_r', facePoint(-0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
