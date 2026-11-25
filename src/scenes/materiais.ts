@@ -535,7 +535,7 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
         pattern: [6, 3],
     },
     alvenaria: {
-        back: ['concreteBlock', 'stoneWall', 'stackedSlate'],
+        back: ['concreteBlock', 'stoneWall', 'stackedSlate', 'gravel'],
         front: ['flagstone', 'cobblestone', 'bamboo'],
         pattern: [4, 2],
     },
