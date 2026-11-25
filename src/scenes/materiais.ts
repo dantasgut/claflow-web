@@ -355,6 +355,8 @@ function studio(
             right: cross3(aim, [0, 1, 0]),
             size: panel.size,
             intensity: panel.luminance * gain,
+            // A sombra dos painéis (spec 013): as órbitas, a base do nariz e o lábio inferior escurecem.
+            castShadow: true,
         });
         app.world.insert(light);
         const d = light.data.direction;
