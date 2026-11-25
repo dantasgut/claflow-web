@@ -1,6 +1,7 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import * as clayflow from 'clayflow/web';
 import type { Application } from 'clayflow/web';
+import { usePanel } from './panels';
 
 /** A taxa de quadros (canto superior direito): os quadros completos no último segundo. */
 export function FpsCounter({ app }: { readonly app: Application }) {
@@ -131,7 +132,9 @@ const engine = {
  * direcional e o céu). Cada grupo e cada seção recolhe e abre pelo título.
  */
 export function ScenePanel({ app }: { readonly app: Application }) {
-    const [open, setOpen] = useState(true);
+    const [open, setOpen] = usePanel('render');
+    const openRef = useRef(open);
+    openRef.current = open;
     const [found, setFound] = useState<Found>(() => findInScene(app));
     const [, redraw] = useState(0);
     const refresh = () => redraw((n) => n + 1);
@@ -144,7 +147,7 @@ export function ScenePanel({ app }: { readonly app: Application }) {
             );
         }, 1000);
         const onKey = (e: KeyboardEvent) => {
-            if (e.code === 'KeyP') setOpen((o) => !o);
+            if (e.code === 'KeyP') setOpen(!openRef.current);
         };
         window.addEventListener('keydown', onKey);
         return () => {
@@ -160,7 +163,7 @@ export function ScenePanel({ app }: { readonly app: Application }) {
 
     return (
         <div style={styles.panel}>
-            <div style={styles.title} onClick={() => setOpen((o) => !o)}>
+            <div style={styles.title} onClick={() => setOpen(!open)}>
                 {open ? '▾' : '▸'} Parâmetros <span style={styles.hint}>(P)</span>
             </div>
             {open && (
@@ -307,7 +310,7 @@ export function ScenePanel({ app }: { readonly app: Application }) {
                             />
                         </Section>
                     </Section>
-                    <div style={styles.hint}>Espaço: pausa · arrastar: girar · roda: aproximar</div>
+                    <div style={styles.hint}>Espaço: pausa · arrastar: girar · roda: aproximar · H: oculta ou mostra todos os painéis</div>
                 </>
             )}
         </div>
@@ -442,7 +445,7 @@ const styles = {
         top: 8,
         left: 8,
         width: 240,
-        maxHeight: 'calc(100vh - 16px)',
+        maxHeight: 'calc(100vh - 16px - var(--dock, 0px))',
         overflowY: 'auto',
         padding: '8px 10px',
         borderRadius: 6,

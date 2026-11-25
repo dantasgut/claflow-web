@@ -1,24 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
-import { Application, createScene, nodes, OrbitController, subgraphOrigin } from 'clayflow/web';
+import { Application, createScene, nodes, OrbitController } from 'clayflow/web';
 import type { MaterialName, NodeDefinition } from 'clayflow/web';
 import { H, W } from './scenes/size';
 import { MATERIAL_FAMILIES, materialStage, type MaterialStage } from './scenes/materiais';
 import { FpsCounter } from './ScenePanel';
-import {
-    ExposedParams,
-    GraphView,
-    heading,
-    numberBox,
-    panel,
-    type GraphEdit,
-    type Param,
-    type Value,
-} from './MaterialNodes';
+import { heading, panel, type GraphEdit, type Param, type Value } from './MaterialNodes';
+import { MaterialWorkbench, type ActiveMaterial } from './MaterialWorkbench';
+import { HideButton, PanelTab, usePanel } from './panels';
+import type { Vec3 } from './project';
+
+const LIST_W = 190;
 
 // A galeria individual dos materiais (spec 011): `?material=<nome>` abre um material numa esfera, com os parâmetros que
 // ele expõe (editáveis ao vivo, sem recompilar: os valores da função) e o grafo de nós de que é feito.
 
-/** A galeria: a lista dos materiais, o palco e o painel de parâmetros e nós. */
+/**
+ * A galeria: a lista dos materiais (à esquerda), o palco e a bancada do material (o inspetor à direita e o painel de nós
+ * embaixo, os mesmos das vitrines).
+ */
 export function MaterialGallery({ name }: { readonly name: MaterialName }) {
     const hostRef = useRef<HTMLDivElement>(null);
     const [error, setError] = useState<string | null>(null);
@@ -28,14 +27,16 @@ export function MaterialGallery({ name }: { readonly name: MaterialName }) {
     const definition = nodes.material[name] as NodeDefinition;
     const params = definition.params as Readonly<Record<string, Param>>;
     const [values, setValues] = useState<Record<string, Value>>({});
-    const [lit, setLit] = useState<string | null>(null);
+    // O canvas do motor em uso e o centro da peça: a miniatura do inspetor recorta a peça dele.
+    const [surface, setSurface] = useState<{ canvas: HTMLCanvasElement; at: Vec3 } | null>(null);
 
     useEffect(() => {
         const host = hostRef.current;
         if (host === null) return;
         const canvas = document.createElement('canvas');
         canvas.style.width = '100%';
-        canvas.style.height = 'auto';
+        canvas.style.height = '100%';
+        canvas.style.objectFit = 'contain';
         canvas.style.display = 'block';
         host.appendChild(canvas);
         let app: Application | undefined;
@@ -66,6 +67,7 @@ export function MaterialGallery({ name }: { readonly name: MaterialName }) {
                 );
                 created.start();
                 setRunning(created);
+                setSurface({ canvas, at: made.target });
                 stageRef.current = made;
                 setValues({ ...made.staged } as Record<string, Value>);
             } catch (err) {
@@ -75,6 +77,7 @@ export function MaterialGallery({ name }: { readonly name: MaterialName }) {
         return () => {
             disposed = true;
             setRunning(null);
+            setSurface(null);
             stageRef.current = null;
             app?.dispose();
             canvas.remove();
@@ -101,62 +104,73 @@ export function MaterialGallery({ name }: { readonly name: MaterialName }) {
         setValues({ ...staged } as Record<string, Value>);
     };
 
-    const origin = subgraphOrigin(definition);
     // Os mesmos valores nos controles expostos e nos nós do grafo (o parâmetro exposto se edita nos dois lugares).
     const edit: GraphEdit = { params, value: current, change };
 
+    const [list, setList] = usePanel('materiais');
+    const active: ActiveMaterial | undefined =
+        surface === null
+            ? undefined
+            : // A peça do palco: a esfera de raio 1 no alvo da câmera.
+              { name, edit, reset, at: surface.at, radius: 1 };
     return (
-        <div style={{ display: 'grid', gridTemplateColumns: '190px 1fr 340px', height: '100vh' }}>
-            <nav style={panel}>
-                <a href="?" style={{ color: '#8ec7ff' }}>
-                    ← cenas
-                </a>
-                {MATERIAL_FAMILIES.map(([family, names]) => (
-                    <div key={family}>
-                        <div style={heading}>{family}</div>
-                        {names.map((n) => (
-                            <a
-                                key={n}
-                                href={`?material=${n}`}
-                                style={{
-                                    display: 'block',
-                                    padding: '2px 6px',
-                                    borderRadius: 4,
-                                    textDecoration: 'none',
-                                    color: n === name ? '#0d0d12' : '#d8d8e0',
-                                    background: n === name ? '#8ec7ff' : 'transparent',
-                                }}
-                            >
-                                {n}
-                            </a>
-                        ))}
+        <div>
+            {list ? (
+                <nav style={{ ...panel, position: 'fixed', left: 0, top: 0, bottom: 'var(--dock, 0px)', width: LIST_W, boxSizing: 'border-box', zIndex: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <a href="?" style={{ color: '#8ec7ff' }}>
+                            ← cenas
+                        </a>
+                        <HideButton onClick={() => setList(false)} />
                     </div>
-                ))}
-            </nav>
-            <main style={{ overflow: 'auto', background: '#0d0d12' }}>
-                <div ref={hostRef} />
-                {running !== null && <FpsCounter app={running} />}
-                {error !== null && <pre style={{ color: '#f66', padding: 12 }}>{error}</pre>}
-                <div style={{ ...panel, background: 'transparent' }}>
-                    <div style={heading}>Nós de {name}</div>
-                    {origin === undefined ? (
-                        <p>Este material não é um sub-grafo de nós.</p>
-                    ) : (
-                        <GraphView key={name} root={definition} lit={lit} edit={edit} />
-                    )}
+                    {MATERIAL_FAMILIES.map(([family, names]) => (
+                        <div key={family}>
+                            <div style={heading}>{family}</div>
+                            {names.map((n) => (
+                                <a
+                                    key={n}
+                                    href={`?material=${n}`}
+                                    style={{
+                                        display: 'block',
+                                        padding: '2px 6px',
+                                        borderRadius: 4,
+                                        textDecoration: 'none',
+                                        color: n === name ? '#0d0d12' : '#d8d8e0',
+                                        background: n === name ? '#8ec7ff' : 'transparent',
+                                    }}
+                                >
+                                    {n}
+                                </a>
+                            ))}
+                        </div>
+                    ))}
+                </nav>
+            ) : (
+                <PanelTab label="Materiais ▸" onClick={() => setList(true)} style={{ top: 8, left: 8 }} />
+            )}
+            {/* O palco ocupa o que os painéis deixam livre; a imagem cabe inteira nele, sem distorcer. */}
+            <main
+                style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: list ? LIST_W : 0,
+                    right: 'var(--inspetor, 0px)',
+                    bottom: 'var(--dock, 0px)',
+                    background: '#0d0d12',
+                }}
+            >
+                <div ref={hostRef} style={{ width: '100%', height: '100%' }} />
+                {error !== null && (
+                    <pre style={{ position: 'absolute', left: 0, top: 0, color: '#f66', padding: 12 }}>{error}</pre>
+                )}
+                <div style={{ position: 'absolute', left: 10, bottom: 6, color: '#888', font: '11px system-ui, sans-serif' }}>
+                    arrastar: girar · roda: aproximar · H: oculta ou mostra todos os painéis
                 </div>
             </main>
-            <aside style={{ ...panel, paddingTop: 44 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <strong style={{ fontSize: 15 }}>{name}</strong>
-                    <button onClick={reset} style={{ ...numberBox, width: 'auto', cursor: 'pointer' }}>
-                        restaurar
-                    </button>
-                </div>
-                <p style={{ color: '#888', marginTop: 4 }}>arrastar: girar · roda: aproximar</p>
-                <div style={heading}>Parâmetros</div>
-                <ExposedParams definition={definition} edit={edit} onLit={setLit} />
-            </aside>
+            {running !== null && <FpsCounter app={running} />}
+            {running !== null && surface !== null && (
+                <MaterialWorkbench app={running} canvas={surface.canvas} active={active} />
+            )}
         </div>
     );
 }

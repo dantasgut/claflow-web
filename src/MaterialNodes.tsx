@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { subgraphOrigin } from 'clayflow/web';
 import type { NodeDefinition } from 'clayflow/web';
 
@@ -186,13 +186,13 @@ export function ExposedParams({
 const show = (v: Value | undefined): string =>
     v === undefined ? '—' : Array.isArray(v) ? `(${v.map((c) => Number(c.toFixed(4))).join(', ')})` : String(v);
 
-interface Link {
+export interface Link {
     readonly from: string;
     readonly to: string;
     readonly port: string;
 }
 
-interface Box {
+export interface Box {
     readonly id: string;
     readonly kind: string;
     readonly inner: NodeDefinition | undefined;
@@ -210,7 +210,7 @@ const mark: React.CSSProperties = { fontSize: 10, textAlign: 'right' };
  * do nó), o que está ligado a outro nó e o que o material expõe — este com o controle, editável no próprio nó (o mesmo
  * valor do controle exposto); as entradas e as saídas com o tipo.
  */
-function NodeParams({
+export function NodeParams({
     box,
     links,
     exposed,
@@ -299,10 +299,21 @@ function describe(node: unknown): { kind: string; inner?: NodeDefinition; values
     return { kind: 'entrada do ponto', values: {} };
 }
 
+/** O nó escolhido no grafo, para o inspetor: a caixa, as ligações e os expostos do grafo em que ele está. */
+export interface NodeSelection {
+    readonly box: Box;
+    readonly links: readonly Link[];
+    readonly exposed: ReadonlyMap<string, string>;
+    /** O nó é do grafo do próprio material (os expostos têm o valor ao vivo), não de um sub-grafo aberto. */
+    readonly live: boolean;
+}
+
 const NODE_W = 230;
 const HEAD_H = 36;
 const GAP_X = 46;
 const GAP_Y = 10;
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 2;
 
 interface Rect {
     readonly x: number;
@@ -311,24 +322,43 @@ interface Rect {
     readonly h: number;
 }
 
+interface View {
+    readonly x: number;
+    readonly y: number;
+    readonly k: number;
+}
+const HOME: View = { x: 0, y: 0, k: 1 };
+
 /**
- * O grafo de nós de um material em colunas (da entrada à saída), com as ligações. Cada nó é um painel: o cabeçalho
- * (identificador e tipo) recolhe e abre; aberto, mostra os parâmetros e as saídas dentro da própria caixa. As caixas têm
- * a altura do conteúdo e as ligações seguem as posições medidas (recalculadas quando um nó muda de tamanho). Um
- * sub-grafo abre no lugar. Com `edit`, os parâmetros que o material expõe são editáveis no nó.
+ * O grafo de nós de um material em colunas (da entrada à saída), com as ligações, ocupando a altura do painel em que
+ * está. Arrastar o fundo move o grafo, a roda rola, Ctrl + roda aproxima. Cada nó é um painel: o triângulo do cabeçalho
+ * recolhe e abre (começam recolhidos); aberto, mostra os parâmetros e as saídas dentro da própria caixa. O clique no
+ * cabeçalho escolhe o nó (`onSelect`, para o inspetor); o clique no fundo desfaz a escolha. As caixas têm a altura do
+ * conteúdo e as ligações seguem as posições medidas. Um sub-grafo abre no lugar. Com `edit`, os parâmetros que o
+ * material expõe são editáveis no nó.
  */
 export function GraphView({
     root,
     lit,
     edit,
+    picked = null,
+    onPick,
+    onSelect,
 }: {
     readonly root: NodeDefinition;
     readonly lit: string | null;
     readonly edit?: GraphEdit;
+    /** O identificador do nó escolhido (o estado é de quem usa o grafo: o inspetor também desfaz a escolha). */
+    readonly picked?: string | null;
+    readonly onPick?: (id: string | null) => void;
+    /** O nó escolhido, com o que o inspetor precisa para mostrar os parâmetros dele. */
+    readonly onSelect?: (selection: NodeSelection | null) => void;
 }) {
+    const setPicked = (id: string | null): void => onPick?.(id);
     const [path, setPath] = useState<readonly NodeDefinition[]>([root]);
-    const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
+    const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
     const [hover, setHover] = useState<string | null>(null);
+    const [view, setView] = useState<View>(HOME);
     const shown = path[path.length - 1] ?? root;
     const layout = useMemo(() => {
         const graph = subgraphOrigin(shown)?.graph;
@@ -376,6 +406,18 @@ export function GraphView({
     // Os parâmetros internos que o sub-grafo expõe: `nó.parâmetro` → o nome exposto.
     const exposed = useMemo(() => exposedPorts(shown), [shown]);
 
+    // O nó escolhido vai ao inspetor (fora do grafo); sem grafo ou ao sair dele, nenhum.
+    useEffect(() => {
+        if (onSelect === undefined) return;
+        const box = picked === null ? undefined : layout?.boxes.get(picked);
+        onSelect(
+            box === undefined || layout === undefined
+                ? null
+                : { box, links: layout.links, exposed, live: shown === root },
+        );
+    }, [onSelect, picked, layout, exposed, shown, root]);
+    useEffect(() => () => onSelect?.(null), [onSelect]);
+
     // As posições das caixas, medidas: a altura de cada uma é a do conteúdo (recolhida, só o cabeçalho), e as de baixo
     // na coluna descem ou sobem com ela — as ligações são redesenhadas a cada mudança de tamanho.
     const hostRef = useRef<HTMLDivElement>(null);
@@ -405,22 +447,48 @@ export function GraphView({
         return () => observer.disconnect();
     }, [layout]);
 
+    // A roda: rola o grafo; com Ctrl (ou o gesto de pinça), aproxima em torno do ponteiro. O ouvinte é direto no
+    // elemento, não passivo, para a página não rolar junto.
+    const viewportRef = useRef<HTMLDivElement>(null);
+    const hasGraph = layout !== undefined;
+    useEffect(() => {
+        const el = viewportRef.current;
+        if (el === null) return;
+        const onWheel = (e: WheelEvent): void => {
+            e.preventDefault();
+            const box = el.getBoundingClientRect();
+            const [cx, cy] = [e.clientX - box.left, e.clientY - box.top];
+            setView((v) => {
+                if (!e.ctrlKey && !e.metaKey) return { ...v, x: v.x - e.deltaX, y: v.y - e.deltaY };
+                const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v.k * Math.exp(-e.deltaY * 0.004)));
+                return { k, x: cx - ((cx - v.x) * k) / v.k, y: cy - ((cy - v.y) * k) / v.k };
+            });
+        };
+        el.addEventListener('wheel', onWheel, { passive: false });
+        return () => el.removeEventListener('wheel', onWheel);
+    }, [hasGraph]);
+    // Arrastar o fundo move o grafo; o clique parado no fundo desfaz a escolha do nó.
+    const drag = useRef<{ x: number; y: number; from: View; moved: boolean } | null>(null);
+
     if (layout === undefined) return <p>Sem grafo.</p>;
     const go = (next: readonly NodeDefinition[]): void => {
         setPath(next);
-        setClosed(new Set());
+        setOpened(new Set());
         setHover(null);
+        setPicked(null);
+        setView(HOME);
     };
     const toggle = (id: string): void => {
-        const next = new Set(closed);
+        const next = new Set(opened);
         if (!next.delete(id)) next.add(id);
-        setClosed(next);
+        setOpened(next);
     };
-    const allClosed = closed.size >= layout.boxes.size;
+    const allOpen = opened.size >= layout.boxes.size;
     // Só o grafo do próprio material tem os valores ao vivo: dentro de um sub-grafo, os expostos são os do nó de fora.
     const live = shown === root ? edit : undefined;
+    const tool: React.CSSProperties = { ...numberBox, width: 'auto', cursor: 'pointer' };
     return (
-        <div>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
             <div style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span>
                     {path.map((d, i) => (
@@ -444,21 +512,64 @@ export function GraphView({
                     </span>
                 </span>
                 <button
-                    onClick={() => setClosed(allClosed ? new Set() : new Set(layout.boxes.keys()))}
-                    style={{ ...numberBox, width: 'auto', cursor: 'pointer' }}
+                    onClick={() => setOpened(allOpen ? new Set() : new Set(layout.boxes.keys()))}
+                    style={tool}
                 >
-                    {allClosed ? 'expandir todos' : 'colapsar todos'}
+                    {allOpen ? 'colapsar todos' : 'expandir todos'}
                 </button>
+                <button onClick={() => setView(HOME)} style={tool} title="volta o grafo ao canto, sem aproximação">
+                    recentrar · {Math.round(view.k * 100)}%
+                </button>
+                <span style={{ color: '#777' }}>
+                    arrastar o fundo: mover · roda: rolar · Ctrl + roda: aproximar · clique no nó: inspecionar
+                </span>
             </div>
-            <div style={{ overflow: 'auto', border: '1px solid #2a2a36', borderRadius: 6 }}>
+            <div
+                ref={viewportRef}
+                onPointerDown={(e) => {
+                    if (e.button !== 0 || (e.target as Element).closest('[data-node]') !== null) return;
+                    drag.current = { x: e.clientX, y: e.clientY, from: view, moved: false };
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                }}
+                onPointerMove={(e) => {
+                    const d = drag.current;
+                    if (d === null) return;
+                    const [dx, dy] = [e.clientX - d.x, e.clientY - d.y];
+                    if (Math.hypot(dx, dy) > 3) d.moved = true;
+                    if (d.moved) setView({ ...d.from, x: d.from.x + dx, y: d.from.y + dy });
+                }}
+                onPointerUp={() => {
+                    const d = drag.current;
+                    drag.current = null;
+                    if (d !== null && !d.moved) setPicked(null);
+                }}
+                onPointerCancel={() => {
+                    drag.current = null;
+                }}
+                style={{
+                    flex: 1,
+                    minHeight: 0,
+                    position: 'relative',
+                    overflow: 'hidden',
+                    border: '1px solid #2a2a36',
+                    borderRadius: 6,
+                    background: '#101018',
+                    cursor: 'grab',
+                    touchAction: 'none',
+                }}
+            >
                 <div
                     ref={hostRef}
                     style={{
-                        position: 'relative',
+                        position: 'absolute',
+                        left: 0,
+                        top: 0,
+                        transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`,
+                        transformOrigin: '0 0',
                         display: 'flex',
                         alignItems: 'flex-start',
                         gap: GAP_X,
-                        padding: 6,
+                        padding: 10,
                         width: 'max-content',
                     }}
                 >
@@ -478,7 +589,8 @@ export function GraphView({
                             if (a === undefined || b === undefined) return null;
                             const [x1, y1] = [a.x + a.w, a.y + HEAD_H / 2];
                             const [x2, y2] = [b.x, b.y + HEAD_H / 2];
-                            const on = hover === l.from || hover === l.to;
+                            const on =
+                                hover === l.from || hover === l.to || picked === l.from || picked === l.to;
                             return (
                                 <path
                                     key={i}
@@ -496,11 +608,13 @@ export function GraphView({
                     {layout.columns.map((column, c) => (
                         <div key={c} style={{ display: 'flex', flexDirection: 'column', gap: GAP_Y }}>
                             {column.map((box) => {
-                                const on = hover === box.id || lit === box.id;
-                                const open = !closed.has(box.id);
+                                const chosen = picked === box.id;
+                                const on = chosen || hover === box.id || lit === box.id;
+                                const open = opened.has(box.id);
                                 return (
                                     <div
                                         key={box.id}
+                                        data-node={box.id}
                                         ref={(el) => {
                                             if (el === null) nodeRefs.current.delete(box.id);
                                             else nodeRefs.current.set(box.id, el);
@@ -513,28 +627,46 @@ export function GraphView({
                                             boxSizing: 'border-box',
                                             borderRadius: 5,
                                             background: '#1b1b26',
+                                            cursor: 'default',
                                             border: `1px solid ${
                                                 on ? '#8ec7ff' : box.inner !== undefined ? '#c9a45c' : '#34344a'
                                             }`,
+                                            boxShadow: chosen ? '0 0 0 2px #8ec7ff' : 'none',
                                         }}
                                     >
                                         <div
-                                            onClick={() => toggle(box.id)}
-                                            title={open ? 'recolher o nó' : 'abrir o nó'}
+                                            onClick={() => setPicked(chosen ? null : box.id)}
+                                            title="inspecionar o nó no painel da direita"
                                             style={{
                                                 height: HEAD_H,
                                                 boxSizing: 'border-box',
                                                 display: 'flex',
                                                 alignItems: 'center',
                                                 gap: 6,
-                                                padding: '0 8px',
+                                                padding: '0 8px 0 2px',
                                                 cursor: 'pointer',
                                                 userSelect: 'none',
                                                 borderRadius: open ? '4px 4px 0 0' : 4,
-                                                background: on ? '#22344a' : '#232334',
+                                                background: chosen ? '#2b4a6b' : on ? '#22344a' : '#232334',
                                             }}
                                         >
-                                            <span style={{ color: '#9a9ab0', width: 10 }}>{open ? '▾' : '▸'}</span>
+                                            <span
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    toggle(box.id);
+                                                }}
+                                                title={open ? 'recolher o nó' : 'abrir o nó'}
+                                                style={{
+                                                    color: '#c8c8d8',
+                                                    width: 20,
+                                                    alignSelf: 'stretch',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                }}
+                                            >
+                                                {open ? '▾' : '▸'}
+                                            </span>
                                             <span style={{ flex: 1, minWidth: 0, lineHeight: 1.2 }}>
                                                 <span
                                                     style={{
