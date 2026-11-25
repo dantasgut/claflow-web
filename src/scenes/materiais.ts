@@ -673,7 +673,8 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
     const brow = blob('brow', facePoint(0, 7.85, 1.4), 0.1, 0.42);
     // Os lábios: uma lente em volta da linha da boca — a meia altura cai em parábola do meio (`up` acima, `down`
     // abaixo) a zero nos cantos (`reach`, a meia largura): o material afina até o canto da boca.
-    const lipShape = { reach: 0.162, up: 0.076, down: 0.086, soft: 0.55 };
+    // `bow`: o arco do cupido — o contorno de cima desce `bow.dip` (fração) no meio, numa meia largura `bow.half`.
+    const lipShape = { reach: 0.162, up: 0.08, down: 0.086, soft: 0.55, bow: { dip: 0.2, half: 0.045 } };
     graph.lip_c = nodes.math.value3.with({ value: [...facePoint(0, 6.6, 1.58)] });
     graph.lip_rel = nodes.math.sub3;
     graph.lip_axes = nodes.math.split3;
@@ -683,12 +684,15 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
     graph.lip_u = nodes.math.div;
     graph.lip_u2 = nodes.math.mul;
     graph.lip_taper = nodes.map.range.with({ in_min: 1, in_max: 0, out_min: 1e-4, out_max: 1 });
-    graph.lip_tall = nodes.map.range.with({
-        in_min: -0.003,
-        in_max: 0.003,
-        out_min: lipShape.down,
-        out_max: lipShape.up,
+    graph.lip_bow = nodes.map.range.with({
+        in_min: lipShape.bow.half,
+        in_max: 0,
+        out_min: lipShape.up,
+        out_max: lipShape.up * (1 - lipShape.bow.dip),
     });
+    graph.lip_down = nodes.math.value.with({ value: lipShape.down });
+    graph.lip_above = nodes.map.range.with({ in_min: -0.003, in_max: 0.003, out_min: 0, out_max: 1 });
+    graph.lip_tall = nodes.math.mix;
     graph.lip_h = nodes.math.mul;
     graph.lip_t = nodes.math.div;
     graph.lip_in = nodes.map.range.with({ in_min: 1, in_max: lipShape.soft, out_min: 0, out_max: 1 });
@@ -709,7 +713,11 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
         ['lip_u.value', 'lip_u2.a'],
         ['lip_u.value', 'lip_u2.b'],
         ['lip_u2.value', 'lip_taper.x'],
-        ['lip_axes.y', 'lip_tall.x'],
+        ['lip_ax.value', 'lip_bow.x'],
+        ['lip_axes.y', 'lip_above.x'],
+        ['lip_down.value', 'lip_tall.a'],
+        ['lip_bow.value', 'lip_tall.b'],
+        ['lip_above.value', 'lip_tall.t'],
         ['lip_tall.value', 'lip_h.a'],
         ['lip_taper.value', 'lip_h.b'],
         ['lip_ay.value', 'lip_t.a'],
@@ -833,6 +841,10 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
         // Os vincos em leque, curvos, a partir do meio da boca.
         centre: [...facePoint(0, 6.6, 1.58)],
         fan: 140,
+        // O tubérculo: o volume de pregas embaralhadas no meio do lábio superior.
+        tubercle: [0, 0.03, 0.02],
+        tubercle_radius: 0.045,
+        tubercle_height: 0.35,
     });
     graph.face = nodes.closure.mix;
     links.push(
