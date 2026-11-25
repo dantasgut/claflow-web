@@ -621,16 +621,17 @@ const FACE_ROSY: FaceLook = {
 };
 
 /** A forma dos lábios no rosto (unidades do objeto) e os valores do relevo deles, comuns ao material e à geometria. */
-// Medida na malha da cabeça: o degrau debaixo do lábio inferior fica 0,069 abaixo do meio da boca e a borda de cima
-// 0,080 acima (0,064 no meio: o arco do cupido), e os dois contornos fecham para o canto como 1 − u^3,4 (u a fração da
-// meia largura) — mais cheios que uma parábola. A máscara vale 1 até `soft` da altura e 0 no fim dela.
+// A lente dos lábios: a meia altura cai em parábola (`power` 2) do meio a zero nos cantos. O contorno é definido: a
+// máscara vale 1 até `soft` da altura e 0 no fim dela. Os sulcos ficam dentro: o relevo deles some antes da borda,
+// entre `core.from` e `core.to` da altura.
 const LIP_SHAPE = {
     reach: 0.162,
-    up: 0.086,
-    down: 0.08,
-    soft: 0.82,
-    power: 3.4,
-    bow: { dip: 0.2, half: 0.05 },
+    up: 0.066,
+    down: 0.071,
+    soft: 0.88,
+    power: 2,
+    core: { from: 0.55, to: 0.84 },
+    bow: { dip: 0.2, half: 0.045 },
 };
 const LIP_RELIEF = {
     scale: FACE_SCALE,
@@ -647,7 +648,11 @@ const LIP_RELIEF = {
  * A máscara dos lábios (1 dentro, 0 fora) sobre a posição `position` (a saída de um nó), posta em `graph` e `links`;
  * devolve a saída. A mesma no material (onde mistura os lábios à pele) e na geometria (onde limita o relevo).
  */
-function lipLens(graph: Record<string, unknown>, links: [string, string][], position: string): string {
+function lipLens(
+    graph: Record<string, unknown>,
+    links: [string, string][],
+    position: string,
+): { readonly mask: string; readonly core: string } {
     // Os lábios: uma lente em volta da linha da boca — a meia altura cai em parábola do meio (`up` acima, `down`
     // abaixo) a zero nos cantos (`reach`, a meia largura): o material afina até o canto da boca.
     // `bow`: o arco do cupido — o contorno de cima desce `bow.dip` (fração) no meio, numa meia largura `bow.half`.
@@ -680,6 +685,14 @@ function lipLens(graph: Record<string, unknown>, links: [string, string][], posi
     graph.lip_end = nodes.map.range.with({ in_min: 1, in_max: 0.7, out_min: 0, out_max: 1 });
     graph.lip_body = nodes.math.mul;
     graph.lips = nodes.math.mul;
+    // O miolo: onde o relevo dos sulcos vale (1), sumindo antes da borda da máscara.
+    graph.lip_inner = nodes.map.range.with({
+        in_min: lipShape.core.to,
+        in_max: lipShape.core.from,
+        out_min: 0,
+        out_max: 1,
+    });
+    graph.lip_core = nodes.math.mul;
     links.push(
         [position, 'lip_rel.a'],
         ['lip_c.value', 'lip_rel.b'],
@@ -708,7 +721,12 @@ function lipLens(graph: Record<string, unknown>, links: [string, string][], posi
         ['lip_body.value', 'lips.a'],
         ['lip_front.value', 'lips.b'],
     );
-    return 'lips.value';
+    links.push(
+        ['lip_t.value', 'lip_inner.x'],
+        ['lip_inner.value', 'lip_core.a'],
+        ['lips.value', 'lip_core.b'],
+    );
+    return { mask: 'lips.value', core: 'lip_core.value' };
 }
 
 function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction {
@@ -767,7 +785,7 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
     const earL = blob('ear_l', facePoint(0.85, 7.2, 0.35), 0.06, 0.26);
     const earR = blob('ear_r', facePoint(-0.85, 7.2, 0.35), 0.06, 0.26);
     const brow = blob('brow', facePoint(0, 7.85, 1.4), 0.1, 0.42);
-    const lips = lipLens(graph, links, 's.object_position');
+    const { mask: lips, core: lipCore } = lipLens(graph, links, 's.object_position');
     // O contorno dos olhos: a pele fina das pálpebras, mais vermelha e mais escura.
     const socketL = blob('socket_l', facePoint(0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
     const socketR = blob('socket_r', facePoint(-0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
@@ -871,6 +889,18 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
     graph.lid_sum = nodes.math.max;
     graph.lid = nodes.math.mix3;
     // Os lábios são outro material (`lips`): misturado à pele pela máscara deles.
+    // O relevo dos sulcos só no miolo dos lábios: cada altura do material multiplicada pela máscara do miolo.
+    const lipHeights = [
+        ['line_height', 0.07],
+        ['fold_height', 0.28],
+        ['network_height', 0.12],
+        ['hatch_height', 0.14],
+        ['tubercle_height', LIP_RELIEF.tubercle_height],
+    ] as const;
+    lipHeights.forEach(([, value], i) => {
+        graph[`lip_height_${i}`] = nodes.math.value.with({ value });
+        graph[`lip_scaled_${i}`] = nodes.math.mul;
+    });
     graph.mouth = nodes.material.lips.with({
         color: [...look.lip],
         gloss: look.gloss,
@@ -887,6 +917,11 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
         ['skin.value', 'face.a'],
         ['mouth.value', 'face.b'],
         [lips, 'face.t'],
+        ...lipHeights.flatMap(([name], i): [string, string][] => [
+            [`lip_height_${i}.value`, `lip_scaled_${i}.a`],
+            [lipCore, `lip_scaled_${i}.b`],
+            [`lip_scaled_${i}.value`, `mouth.${name}`],
+        ]),
     );
     return materialGraph(graph as Parameters<typeof materialGraph>[0], links, 'face.value');
 }
@@ -959,7 +994,7 @@ function displacedFace(mesh: MeshGeometry): SetGraph {
     const fine = mesh.refined(LIP_LEVELS, (x, y, z) => {
         const u = Math.abs(x) / (LIP_SHAPE.reach * 1.05);
         if (u >= 1 || z - centre[2] < -0.2) return false;
-        const tall = (y > centre[1] ? LIP_SHAPE.up : LIP_SHAPE.down) * 1.15 * (1 - u ** LIP_SHAPE.power);
+        const tall = ((y > centre[1] ? LIP_SHAPE.up : LIP_SHAPE.down) * 1.15 + 0.02) * (1 - u ** LIP_SHAPE.power);
         return Math.abs(y - centre[1]) < tall;
     });
     const graph: Record<string, unknown> = {
@@ -997,7 +1032,7 @@ function displacedFace(mesh: MeshGeometry): SetGraph {
         ['p.value', 'h.position'],
         ['h.value', 'masked.a'],
     ];
-    const lens = lipLens(graph, links, 'p.value');
+    const { core: lens } = lipLens(graph, links, 'p.value');
     links.push(
         [lens, 'masked.b'],
         ['masked.value', 'relief.a'],
