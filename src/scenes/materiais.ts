@@ -612,7 +612,7 @@ const FACE_ROSY: FaceLook = {
     flush: 1,
     lip: [0.45, 0.11, 0.12],
     lid: [0.88, 0.78, 0.76],
-    gloss: 0.5,
+    gloss: 0.75,
 };
 
 function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction {
