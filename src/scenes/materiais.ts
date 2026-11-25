@@ -13,7 +13,10 @@ import {
     GlobalIllumination,
     Materials,
     MeshGeometry,
+    meshSource,
+    NodeGraph,
     nodes,
+    SetGraph,
     ParametricSurface,
     PlaneGeometry,
     RectLight,
@@ -25,6 +28,8 @@ import {
     Transform,
     UiPanel,
     UiText,
+    graphArgument,
+    GraphGeometry,
 } from 'clayflow/web';
 import type { Application, MaterialFunction, MaterialName } from 'clayflow/web';
 import type { Shot } from './catalog';
@@ -615,6 +620,86 @@ const FACE_ROSY: FaceLook = {
     gloss: 0.75,
 };
 
+/** A forma dos lábios no rosto (unidades do objeto) e os valores do relevo deles, comuns ao material e à geometria. */
+const LIP_SHAPE = { reach: 0.162, up: 0.08, down: 0.086, soft: 0.55, bow: { dip: 0.2, half: 0.045 } };
+const LIP_RELIEF = {
+    scale: FACE_SCALE,
+    // Os vincos em leque, curvos, a partir do meio da boca.
+    centre: [...facePoint(0, 6.6, 1.58)],
+    fan: 140,
+    // O tubérculo: o volume de pregas embaralhadas no meio do lábio superior.
+    tubercle: [0, 0.03, 0.02],
+    tubercle_radius: 0.045,
+    tubercle_height: 0.35,
+};
+
+/**
+ * A máscara dos lábios (1 dentro, 0 fora) sobre a posição `position` (a saída de um nó), posta em `graph` e `links`;
+ * devolve a saída. A mesma no material (onde mistura os lábios à pele) e na geometria (onde limita o relevo).
+ */
+function lipLens(graph: Record<string, unknown>, links: [string, string][], position: string): string {
+    // Os lábios: uma lente em volta da linha da boca — a meia altura cai em parábola do meio (`up` acima, `down`
+    // abaixo) a zero nos cantos (`reach`, a meia largura): o material afina até o canto da boca.
+    // `bow`: o arco do cupido — o contorno de cima desce `bow.dip` (fração) no meio, numa meia largura `bow.half`.
+    const lipShape = LIP_SHAPE;
+    graph.lip_c = nodes.math.value3.with({ value: [...facePoint(0, 6.6, 1.58)] });
+    graph.lip_rel = nodes.math.sub3;
+    graph.lip_axes = nodes.math.split3;
+    graph.lip_ax = nodes.math.abs;
+    graph.lip_ay = nodes.math.abs;
+    graph.lip_reach = nodes.math.value.with({ value: lipShape.reach });
+    graph.lip_u = nodes.math.div;
+    graph.lip_u2 = nodes.math.mul;
+    graph.lip_taper = nodes.map.range.with({ in_min: 1, in_max: 0, out_min: 1e-4, out_max: 1 });
+    graph.lip_bow = nodes.map.range.with({
+        in_min: lipShape.bow.half,
+        in_max: 0,
+        out_min: lipShape.up,
+        out_max: lipShape.up * (1 - lipShape.bow.dip),
+    });
+    graph.lip_down = nodes.math.value.with({ value: lipShape.down });
+    graph.lip_above = nodes.map.range.with({ in_min: -0.003, in_max: 0.003, out_min: 0, out_max: 1 });
+    graph.lip_tall = nodes.math.mix;
+    graph.lip_h = nodes.math.mul;
+    graph.lip_t = nodes.math.div;
+    graph.lip_in = nodes.map.range.with({ in_min: 1, in_max: lipShape.soft, out_min: 0, out_max: 1 });
+    // Só a frente da cabeça (a lente é um prisma ao longo de z).
+    graph.lip_front = nodes.map.range.with({ in_min: -0.3, in_max: -0.2, out_min: 0, out_max: 1 });
+    // A ponta some aos poucos no canto.
+    graph.lip_end = nodes.map.range.with({ in_min: 1, in_max: 0.7, out_min: 0, out_max: 1 });
+    graph.lip_body = nodes.math.mul;
+    graph.lips = nodes.math.mul;
+    links.push(
+        [position, 'lip_rel.a'],
+        ['lip_c.value', 'lip_rel.b'],
+        ['lip_rel.value', 'lip_axes.v'],
+        ['lip_axes.x', 'lip_ax.x'],
+        ['lip_axes.y', 'lip_ay.x'],
+        ['lip_ax.value', 'lip_u.a'],
+        ['lip_reach.value', 'lip_u.b'],
+        ['lip_u.value', 'lip_u2.a'],
+        ['lip_u.value', 'lip_u2.b'],
+        ['lip_u2.value', 'lip_taper.x'],
+        ['lip_ax.value', 'lip_bow.x'],
+        ['lip_axes.y', 'lip_above.x'],
+        ['lip_down.value', 'lip_tall.a'],
+        ['lip_bow.value', 'lip_tall.b'],
+        ['lip_above.value', 'lip_tall.t'],
+        ['lip_tall.value', 'lip_h.a'],
+        ['lip_taper.value', 'lip_h.b'],
+        ['lip_ay.value', 'lip_t.a'],
+        ['lip_h.value', 'lip_t.b'],
+        ['lip_t.value', 'lip_in.x'],
+        ['lip_axes.z', 'lip_front.x'],
+        ['lip_u2.value', 'lip_end.x'],
+        ['lip_in.value', 'lip_body.a'],
+        ['lip_end.value', 'lip_body.b'],
+        ['lip_body.value', 'lips.a'],
+        ['lip_front.value', 'lips.b'],
+    );
+    return 'lips.value';
+}
+
 function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction {
     const graph: Record<string, unknown> = {
         s: nodes.input.surfaceSample(),
@@ -671,66 +756,7 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
     const earL = blob('ear_l', facePoint(0.85, 7.2, 0.35), 0.06, 0.26);
     const earR = blob('ear_r', facePoint(-0.85, 7.2, 0.35), 0.06, 0.26);
     const brow = blob('brow', facePoint(0, 7.85, 1.4), 0.1, 0.42);
-    // Os lábios: uma lente em volta da linha da boca — a meia altura cai em parábola do meio (`up` acima, `down`
-    // abaixo) a zero nos cantos (`reach`, a meia largura): o material afina até o canto da boca.
-    // `bow`: o arco do cupido — o contorno de cima desce `bow.dip` (fração) no meio, numa meia largura `bow.half`.
-    const lipShape = { reach: 0.162, up: 0.08, down: 0.086, soft: 0.55, bow: { dip: 0.2, half: 0.045 } };
-    graph.lip_c = nodes.math.value3.with({ value: [...facePoint(0, 6.6, 1.58)] });
-    graph.lip_rel = nodes.math.sub3;
-    graph.lip_axes = nodes.math.split3;
-    graph.lip_ax = nodes.math.abs;
-    graph.lip_ay = nodes.math.abs;
-    graph.lip_reach = nodes.math.value.with({ value: lipShape.reach });
-    graph.lip_u = nodes.math.div;
-    graph.lip_u2 = nodes.math.mul;
-    graph.lip_taper = nodes.map.range.with({ in_min: 1, in_max: 0, out_min: 1e-4, out_max: 1 });
-    graph.lip_bow = nodes.map.range.with({
-        in_min: lipShape.bow.half,
-        in_max: 0,
-        out_min: lipShape.up,
-        out_max: lipShape.up * (1 - lipShape.bow.dip),
-    });
-    graph.lip_down = nodes.math.value.with({ value: lipShape.down });
-    graph.lip_above = nodes.map.range.with({ in_min: -0.003, in_max: 0.003, out_min: 0, out_max: 1 });
-    graph.lip_tall = nodes.math.mix;
-    graph.lip_h = nodes.math.mul;
-    graph.lip_t = nodes.math.div;
-    graph.lip_in = nodes.map.range.with({ in_min: 1, in_max: lipShape.soft, out_min: 0, out_max: 1 });
-    // Só a frente da cabeça (a lente é um prisma ao longo de z).
-    graph.lip_front = nodes.map.range.with({ in_min: -0.3, in_max: -0.2, out_min: 0, out_max: 1 });
-    // A ponta some aos poucos no canto.
-    graph.lip_end = nodes.map.range.with({ in_min: 1, in_max: 0.7, out_min: 0, out_max: 1 });
-    graph.lip_body = nodes.math.mul;
-    graph.lips = nodes.math.mul;
-    links.push(
-        ['s.object_position', 'lip_rel.a'],
-        ['lip_c.value', 'lip_rel.b'],
-        ['lip_rel.value', 'lip_axes.v'],
-        ['lip_axes.x', 'lip_ax.x'],
-        ['lip_axes.y', 'lip_ay.x'],
-        ['lip_ax.value', 'lip_u.a'],
-        ['lip_reach.value', 'lip_u.b'],
-        ['lip_u.value', 'lip_u2.a'],
-        ['lip_u.value', 'lip_u2.b'],
-        ['lip_u2.value', 'lip_taper.x'],
-        ['lip_ax.value', 'lip_bow.x'],
-        ['lip_axes.y', 'lip_above.x'],
-        ['lip_down.value', 'lip_tall.a'],
-        ['lip_bow.value', 'lip_tall.b'],
-        ['lip_above.value', 'lip_tall.t'],
-        ['lip_tall.value', 'lip_h.a'],
-        ['lip_taper.value', 'lip_h.b'],
-        ['lip_ay.value', 'lip_t.a'],
-        ['lip_h.value', 'lip_t.b'],
-        ['lip_t.value', 'lip_in.x'],
-        ['lip_axes.z', 'lip_front.x'],
-        ['lip_u2.value', 'lip_end.x'],
-        ['lip_in.value', 'lip_body.a'],
-        ['lip_end.value', 'lip_body.b'],
-        ['lip_body.value', 'lips.a'],
-        ['lip_front.value', 'lips.b'],
-    );
-    const lips = 'lips.value';
+    const lips = lipLens(graph, links, 's.object_position');
     // O contorno dos olhos: a pele fina das pálpebras, mais vermelha e mais escura.
     const socketL = blob('socket_l', facePoint(0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
     const socketR = blob('socket_r', facePoint(-0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
@@ -835,16 +861,9 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
     graph.lid = nodes.math.mix3;
     // Os lábios são outro material (`lips`): misturado à pele pela máscara deles.
     graph.mouth = nodes.material.lips.with({
-        scale: FACE_SCALE,
         color: [...look.lip],
         gloss: look.gloss,
-        // Os vincos em leque, curvos, a partir do meio da boca.
-        centre: [...facePoint(0, 6.6, 1.58)],
-        fan: 140,
-        // O tubérculo: o volume de pregas embaralhadas no meio do lábio superior.
-        tubercle: [0, 0.03, 0.02],
-        tubercle_radius: 0.045,
-        tubercle_height: 0.35,
+        ...LIP_RELIEF,
     });
     graph.face = nodes.closure.mix;
     links.push(
@@ -902,7 +921,7 @@ function face(app: Application, fn: MaterialFunction, iris: Values, soft = false
             });
             if (!soft) {
                 app.world.insert(
-                    mesh
+                    displacedFace(mesh)
                         .add(new StandardMaterial())
                         .add(new Transform({ position: [0, lift, 0, 1] }))
                         .add(fn),
@@ -911,6 +930,51 @@ function face(app: Application, fn: MaterialFunction, iris: Values, soft = false
             }
             app.world.insert(softFace(mesh).add(new StandardMaterial()).add(new Transform()).add(fn));
         });
+}
+
+/**
+ * A cabeça com o relevo dos lábios como geometria: a malha dividida `LIP_LEVELS` vezes só na região dos lábios
+ * (`MeshGeometry.refined`), levada a um grafo de conjunto (`meshSource`) e deslocada ao longo da normal pela altura do
+ * material dos lábios (`height.lips`, os mesmos padrões e valores), dentro da mesma máscara — o material segue
+ * inclinando a normal pelo que a malha não resolve.
+ */
+const LIP_LEVELS = 2;
+/** O passo da malha dos lábios depois da divisão (a aresta média de origem, 0,0054, pela metade a cada nível). */
+const LIP_STEP = 0.0054 / 2 ** LIP_LEVELS;
+function displacedFace(mesh: MeshGeometry): SetGraph {
+    const centre = facePoint(0, 6.6, 1.58);
+    const fine = mesh.refined(LIP_LEVELS, (x, y, z) => {
+        const u = Math.abs(x) / (LIP_SHAPE.reach * 1.05);
+        if (u >= 1 || z - centre[2] < -0.2) return false;
+        const tall = (y > centre[1] ? LIP_SHAPE.up : LIP_SHAPE.down) * 1.1 * (1 - u * u);
+        return Math.abs(y - centre[1]) < tall;
+    });
+    const graph: Record<string, unknown> = {
+        m: meshSource(fine.data),
+        p: graphArgument('position'),
+        h: nodes.height.lips.with({ ...LIP_RELIEF, width: LIP_STEP }),
+        masked: nodes.math.mul,
+        // Metade da altura vai para a geometria: na altura cheia os sulcos abrem entalhes de 1 mm na linha da boca.
+        d: nodes.set.displace.with({ scale: 0.5 }),
+        o: nodes.set.meshOutput,
+    };
+    const links: [string, string][] = [
+        ['m.mesh', 'd.mesh'],
+        ['p.value', 'h.position'],
+        ['h.value', 'masked.a'],
+    ];
+    const lens = lipLens(graph, links, 'p.value');
+    links.push([lens, 'masked.b'], ['masked.value', 'd.height'], ['d.mesh', 'o.mesh']);
+    const set = new SetGraph({
+        graph: new NodeGraph({ nodes: graph, links } as ConstructorParameters<typeof NodeGraph>[0]),
+    });
+    set.add(
+        new GraphGeometry({
+            vertexCapacity: fine.data.vertexCount,
+            indexCapacity: fine.data.indexCount,
+        }),
+    );
+    return set;
 }
 
 /**
