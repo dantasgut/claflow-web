@@ -493,6 +493,12 @@ interface Showcase {
         /** A luminância das luzes pequenas dos realces e a fração da energia espalhada pela lente. */
         readonly spark: number;
         readonly glare: number;
+        /**
+         * Sem o filtro do sinal traçado: ele suaviza o ruído da refração no tempo e no espaço e, com isso, borra as
+         * faíscas das facetas (pontos pequenos e muito fortes). Nas peças lapidadas e lisas o caminho é quase todo
+         * determinístico, e o antisserrilhado temporal basta.
+         */
+        readonly crisp?: boolean;
     };
     /** As peças lapidadas (o corte brilhante no lugar da esfera): o brilho de uma gema é das facetas. */
     readonly cut?: readonly MaterialName[];
@@ -528,6 +534,7 @@ function tentLights(app: Application, tent: Tent): void {
         );
     }
     app.defaults.post.addEffect(new Bloom({ strength: tent.glare }));
+    if (tent.crisp === true) app.defaults.renderer.temporalFilter.enabled = false;
 }
 
 /** A família da vitrine a que o material pertence (a tenda de luz e a lapidação valem também na galeria dele). */
@@ -669,19 +676,19 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
         back: ['glassGreen', 'glassBlue', 'glassAmber', 'glassFrosted'],
         front: ['crystal', 'obsidian', 'amber'],
         cut: ['crystal'],
-        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.14 },
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05, crisp: true },
     },
     gemas: {
         back: ['diamond', 'ruby', 'sapphire', 'emerald'],
         front: ['aquamarine', 'topaz', 'garnet', 'peridot'],
         cut: ['diamond', 'ruby', 'sapphire', 'emerald', 'aquamarine', 'topaz', 'garnet', 'peridot'],
-        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.14 },
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05, crisp: true },
     },
     cristais: {
         back: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
         front: ['turquoise', 'lapisLazuli', 'malachite', 'opal', 'onyx'],
         cut: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
-        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.14 },
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05, crisp: true },
     },
     alvenaria: {
         back: ['concreteBlock', 'stoneWall', 'stackedSlate', 'gravel'],
