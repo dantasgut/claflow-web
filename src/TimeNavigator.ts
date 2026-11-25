@@ -44,6 +44,8 @@ export class TimeNavigator {
     private readonly app: Application;
     private readonly update: (i: number) => void;
     private readonly frames: number;
+    /** Deslocamento do roteiro da cena em relação ao tempo simulado (quadros): a posição escolhida na linha do tempo. */
+    private offset = 0;
 
     constructor(app: Application, update: (i: number) => void, frames: number) {
         this.app = app;
@@ -59,6 +61,26 @@ export class TimeNavigator {
      */
     get frame(): number {
         return Math.round(this.app.time.simulated * 60);
+    }
+
+    /** Quantos quadros tem o roteiro da cena (o laço). */
+    get length(): number {
+        return this.frames;
+    }
+
+    /** O quadro do roteiro da cena que está na tela (0 a `length` − 1): o do tempo simulado mais o deslocamento. */
+    get position(): number {
+        return (((this.frame + this.offset) % this.frames) + this.frames) % this.frames;
+    }
+
+    /**
+     * Leva o roteiro da cena (a câmera, as luzes, o que `update` move) ao quadro `i` da linha do tempo. O tempo
+     * simulado não volta: o que a simulação já fez (partículas, corpo mole) fica como está.
+     */
+    seek(i: number): void {
+        const target = Math.min(Math.max(Math.round(i), 0), this.frames - 1);
+        this.offset += target - this.position;
+        this.changed();
     }
 
     /** Avisa quem desenha os controles. */
@@ -122,7 +144,7 @@ export class TimeNavigator {
             position: [...camera.transform.data.position],
             rotation: [...camera.transform.data.rotation],
         };
-        this.update(this.frame % this.frames);
+        this.update(this.position);
         if (camera !== undefined && pose !== undefined) {
             camera.transform.data.position = pose.position;
             camera.transform.data.rotation = pose.rotation;
