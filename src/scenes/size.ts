@@ -1,7 +1,7 @@
 // O tamanho do quadro das cenas: num módulo próprio, para o catálogo e as cenas dos materiais o lerem sem um importar
 // o outro. Por ordem: `?w=` e `?h=` na URL; a escolha guardada no navegador (o controle "resolução do quadro" do
-// app: a largura da janela, ou a nativa da tela — a da janela pela densidade de pixels); 1280 × 720 (o tamanho dos
-// vídeos e das capturas, que rodam num navegador sem escolha guardada). O quadro é sempre 16:9; o canvas é esticado
+// app: 1280 × 720, a largura da janela, ou a nativa da tela — a da janela pela densidade de pixels); sem escolha, a
+// largura da janela (1280 × 720 nos vídeos e nas capturas, que rodam num navegador comandado por automação). O quadro é sempre 16:9; o canvas é esticado
 // para a largura da janela, então um quadro menor que ela sai ampliado — borrado e serrilhado ao mesmo tempo.
 const q = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
 
@@ -9,13 +9,18 @@ const q = new URLSearchParams(typeof location === 'undefined' ? '' : location.se
 export type FrameChoice = '720p' | 'janela' | 'nativa';
 const KEY = 'claflow.quadro';
 
-/** A escolha guardada (sem nenhuma: 720p). */
+/**
+ * A escolha guardada; sem nenhuma, a largura da janela — o quadro de 1280 × 720 esticado na janela sai borrado e
+ * serrilhado. No navegador comandado por automação (os vídeos e as capturas), 1280 × 720.
+ */
 export function frameChoice(): FrameChoice {
+    const automated = typeof navigator !== 'undefined' && navigator.webdriver === true;
+    const fallback: FrameChoice = automated ? '720p' : 'janela';
     try {
         const v = typeof localStorage === 'undefined' ? null : localStorage.getItem(KEY);
-        return v === 'janela' || v === 'nativa' ? v : '720p';
+        return v === 'janela' || v === 'nativa' || v === '720p' ? v : fallback;
     } catch {
-        return '720p';
+        return fallback;
     }
 }
 
