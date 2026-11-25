@@ -1,14 +1,17 @@
 import { useEffect, useState, type CSSProperties } from 'react';
+import { HideButton, PanelTab, usePanel } from './panels';
 import { SPEEDS, type TimeNavigator } from './TimeNavigator';
 
 /**
  * A barra do tempo (embaixo, no meio): pausa e continua (Espaço), um quadro adiante com o tempo pausado (→), a
  * velocidade, a câmera seguindo o tempo ou livre (C: arrastar gira, roda aproxima — também com o tempo congelado), a
  * linha do tempo do roteiro da cena (arrastar leva a cena ao quadro; ← e → com o tempo pausado andam um quadro) e o
- * tempo da cena.
+ * tempo da cena. Oculta (o botão, ou o H com os outros painéis), fica uma aba; os atalhos seguem valendo. Sobe para
+ * dar lugar ao painel de nós, quando há um embaixo (`--dock`).
  */
 export function TimeControls({ nav }: { readonly nav: TimeNavigator }) {
     const [, redraw] = useState(0);
+    const [open, setOpen] = usePanel('tempo');
     useEffect(() => {
         const off = nav.onChange(() => redraw((n) => n + 1));
         // O relógio da barra (o quadro anda sem aviso enquanto o tempo corre).
@@ -28,6 +31,15 @@ export function TimeControls({ nav }: { readonly nav: TimeNavigator }) {
             window.removeEventListener('keydown', onKey);
         };
     }, [nav]);
+    if (!open) {
+        return (
+            <PanelTab
+                label="Tempo ▴"
+                onClick={() => setOpen(true)}
+                style={{ bottom: 'calc(var(--dock, 0px) + 4px)', left: '50%', transform: 'translateX(-50%)' }}
+            />
+        );
+    }
     return (
         <div style={styles.bar}>
             <button style={styles.button} onClick={() => nav.togglePause()} title="Espaço">
@@ -83,6 +95,7 @@ export function TimeControls({ nav }: { readonly nav: TimeNavigator }) {
                 {nav.paused ? 'pausado · ' : ''}quadro {nav.position} de {nav.length - 1} · t ={' '}
                 {(nav.frame / 60).toFixed(2)} s
             </span>
+            <HideButton onClick={() => setOpen(false)} />
         </div>
     );
 }
@@ -92,7 +105,7 @@ const font = '12px ui-sans-serif, system-ui, sans-serif';
 const styles = {
     bar: {
         position: 'fixed',
-        bottom: 12,
+        bottom: 'calc(var(--dock, 0px) + 12px)',
         left: '50%',
         transform: 'translateX(-50%)',
         display: 'flex',

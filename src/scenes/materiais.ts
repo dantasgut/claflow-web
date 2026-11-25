@@ -13,9 +13,13 @@ import {
     GlobalIllumination,
     Materials,
     MeshGeometry,
+    meshSource,
+    NodeGraph,
     nodes,
+    SetGraph,
     ParametricSurface,
     PlaneGeometry,
+    Bloom,
     RectLight,
     Sky,
     SoftBody,
@@ -25,10 +29,13 @@ import {
     Transform,
     UiPanel,
     UiText,
+    graphArgument,
+    GraphGeometry,
 } from 'clayflow/web';
 import type { Application, MaterialFunction, MaterialName } from 'clayflow/web';
 import type { Shot } from './catalog';
 import { H, W } from './size';
+import { brilliantCut } from './support/gemCut';
 import { loadHdr } from './support/hdr';
 import { materialGraph } from './support/materialScenes';
 
@@ -117,7 +124,11 @@ function galleryValues(name: MaterialName, pattern: readonly [number, number], r
     const params = nodes.material[name].params;
     const scale = 'radius' in params ? GALLERY_SCALE : RELIEF_SCALE;
     return {
-        ...('pattern_scale' in params ? { pattern_scale: [...pattern] } : {}),
+        // As repetições no uv (dois números) só nos padrões de superfície; os maciços (`pattern_scale` de um número: por
+        // unidade do objeto) ficam com o valor próprio.
+        ...('pattern_scale' in params && params.pattern_scale.type !== 'f32'
+            ? { pattern_scale: [...pattern] }
+            : {}),
         ...('scale' in params ? { scale } : {}),
         // Uma unidade do padrão em metros (os flocos da pintura): meia volta da esfera, a 5,5 unidades por metro.
         ...('pattern_size' in params ? { pattern_size: (Math.PI * radius) / RELIEF_SCALE } : {}),
@@ -467,6 +478,122 @@ const hsv = (h: number, s: number, v: number): number[] => {
 interface Showcase {
     readonly back: readonly MaterialName[];
     readonly front: readonly MaterialName[];
+    /** As repetições do padrão no uv (sem: as da galeria) — os desenhos de metro, grandes demais na esfera. */
+    readonly pattern?: readonly [number, number];
+    /**
+     * A tenda de luz dos metais e das gemas (sem: o estúdio cinza): o ganho dos painéis, a luz do ambiente (o que o
+     * espelho reflete onde não há painel), o tom do chão e do fundo e a intensidade da luz direcional (os realces
+     * vivos, as cáusticas).
+     */
+    readonly tent?: {
+        readonly gain: number;
+        readonly ambient: number;
+        readonly floor: number;
+        readonly sun: number;
+        /** A luminância das luzes pequenas dos realces e a fração da energia espalhada pela lente. */
+        readonly spark: number;
+        readonly glare: number;
+        /**
+         * Sem o filtro do sinal traçado: ele suaviza o ruído da refração no tempo e no espaço e, com isso, borra as
+         * faíscas das facetas (pontos pequenos e muito fortes). Nas peças lapidadas e lisas o caminho é quase todo
+         * determinístico, e o antisserrilhado temporal basta.
+         */
+        readonly crisp?: boolean;
+    };
+    /** As peças lapidadas (o corte brilhante no lugar da esfera): o brilho de uma gema é das facetas. */
+    readonly cut?: readonly MaterialName[];
+}
+
+/** As luzes pequenas dos realces da tenda: quatro pontos altos em volta das peças. */
+const TENT_SPARKS: readonly Vec3[] = [
+    [-2.4, 3.6, 2.8],
+    [2.6, 4.1, 1.6],
+    [0.4, 4.6, -2.2],
+    [-3.1, 3.1, -0.8],
+];
+
+/** A tenda de luz de uma família (ver `Showcase.tent`). */
+type Tent = NonNullable<Showcase['tent']>;
+
+/**
+ * Monta a tenda de luz: a luz do ambiente, as luzes pequenas e muito fortes (o ponto de luz no metal polido, a faísca
+ * na faceta) e o espalhamento da lente, que faz o clarão em volta do que é muito mais forte que o resto da imagem.
+ */
+function tentLights(app: Application, tent: Tent): void {
+    app.defaults.ambient.data.intensity = tent.ambient;
+    for (const at of TENT_SPARKS) {
+        const aim = unit3(sub3(GALLERY_PANEL_TARGET, at));
+        app.world.insert(
+            new RectLight({
+                position: [...at, 1],
+                direction: [...aim, 0],
+                right: cross3(aim, [0, 1, 0]),
+                size: [0.22, 0.22],
+                intensity: tent.spark,
+            }),
+        );
+    }
+    app.defaults.post.addEffect(new Bloom({ strength: tent.glare }));
+    if (tent.crisp === true) app.defaults.renderer.temporalFilter.enabled = false;
+}
+
+/** A família da vitrine a que o material pertence (a tenda de luz e a lapidação valem também na galeria dele). */
+function familyOf(name: MaterialName): Showcase | undefined {
+    return Object.values(SHOWCASE).find((f) => f.back.includes(name) || f.front.includes(name));
+}
+
+/** Põe uma gema lapidada na cena: a mesa inclinada para a câmera, a culaça acima do chão. */
+function gem(app: Application, name: MaterialName, at: Vec3, radius: number): { material: Valued } {
+    const lean = 0.5;
+    const material = Materials[name](galleryValues(name, [2, 1], radius));
+    app.world.insert(
+        brilliantCut(radius)
+            .add(new StandardMaterial())
+            .add(
+                new Transform({
+                    position: [at[0], at[1] + 0.2 * radius, at[2], 1],
+                    rotation: [Math.sin(lean / 2), 0, 0, Math.cos(lean / 2)],
+                }),
+            )
+            .add(material),
+    );
+    return { material: material as unknown as Valued };
+}
+
+/** Uma peça da vitrine para o painel do app: as funções (os valores mudam ao vivo), os valores da montagem e o lugar. */
+export interface ShowcasePiece {
+    readonly material: Valued;
+    readonly displacement?: Valued;
+    /** Os valores com que a vitrine montou o material (todos os parâmetros, lidos na inserção). */
+    readonly staged: Values;
+    readonly at: Vec3;
+    readonly radius: number;
+}
+
+const SHOWCASE_PIECES = new WeakMap<Application, Map<string, ShowcasePiece>>();
+
+/** As peças que a vitrine inseriu em `app` (nome do material → a peça); vazio fora das cenas `vitrine-*`. */
+export function showcasePieces(app: Application): ReadonlyMap<string, ShowcasePiece> {
+    return SHOWCASE_PIECES.get(app) ?? new Map();
+}
+
+/** Registra uma peça da vitrine, com os valores do material como estão na inserção. */
+function registerPiece(
+    app: Application,
+    name: string,
+    made: { material: Valued; displacement?: Valued },
+    at: Vec3,
+    radius: number,
+): void {
+    const staged: Values = {};
+    for (const key of Object.keys(made.material.params)) {
+        const v = made.material.values[key];
+        if (typeof v === 'number') staged[key] = v;
+        else if (Array.isArray(v)) staged[key] = [...(v as number[])];
+    }
+    let pieces = SHOWCASE_PIECES.get(app);
+    if (pieces === undefined) SHOWCASE_PIECES.set(app, (pieces = new Map()));
+    pieces.set(name, { ...made, staged, at, radius });
 }
 
 /** As peças da vitrine com o relevo na geometria (as outras: a esfera pronta, o relevo na normal). */
@@ -477,17 +604,39 @@ const SHOWCASE_RELIEF: Partial<Record<MaterialName, NonNullable<Piece['displaced
     bark: { scale: BARK_SCALE, pattern: [1.5, 1.5] },
     barkPine: { scale: BARK_SCALE, pattern: [1.5, 1.5] },
     barkBirch: { scale: RELIEF_SCALE, pattern: [1, 1] },
+    // Os de peças: uma unidade do padrão é um metro — `scale` é o lado do uv da esfera (2,13) pelas repetições.
+    paverHerringbone: { scale: 0.43, pattern: [5, 5] },
+    concreteSlab: { scale: 0.43, pattern: [5, 5] },
+    stoneSetts: { scale: 0.43, pattern: [5, 5] },
+    stoneWall: { scale: 0.6, pattern: [3.5, 3.5] },
+    stackedSlate: { scale: 0.6, pattern: [3.5, 3.5] },
+    flagstone: { scale: 0.6, pattern: [3.5, 3.5] },
+    cobblestone: { scale: 0.6, pattern: [3.5, 3.5] },
+    gravel: { scale: 1.6, pattern: [1.3, 1.3] },
+    bamboo: { scale: 0.85, pattern: [2.5, 2.5] },
 };
 
-/** As famílias da vitrine: os 75 materiais da biblioteca, cada um numa cena. */
+/** As repetições do padrão das peças vistas de perto (o grão do asfalto some na escala da família). */
+const SHOWCASE_PATTERN: Partial<Record<MaterialName, readonly [number, number]>> = {
+    asphaltFine: [0.6, 0.3],
+    asphaltCoarse: [1.6, 0.8],
+    asphaltCracked: [1.6, 0.8],
+};
+
+/** As famílias da vitrine: todos os materiais da biblioteca, cada um numa cena. */
 const SHOWCASE: Readonly<Record<string, Showcase>> = {
     metais: {
-        back: ['gold', 'copper', 'brass', 'chrome'],
-        front: ['aluminiumAnodized', 'metalPolished', 'metalBrushed', 'metalHammered'],
+        back: ['gold', 'goldMatte', 'silver', 'silverMatte'],
+        front: ['copper', 'brass', 'chrome', 'metalPolished'],
+        tent: { gain: 1.2, ambient: 0.16, floor: 0.3, sun: 2, spark: 500, glare: 0.14 },
+    },
+    'metais-lavrados': {
+        back: ['aluminiumAnodized', 'metalBrushed'],
+        front: ['metalHammered'],
     },
     'metais-acabados': {
         back: ['castIron', 'bronzePatina', 'metalOxidized', 'carbonFiber'],
-        front: ['carPaint', 'carPaintSilver', 'carPaintFlake'],
+        front: ['carPaint', 'carPaintSilver', 'carPaintFlake', 'goldLeaf'],
     },
     madeiras: {
         back: ['woodPine', 'woodOak', 'woodWalnut', 'woodMahogany'],
@@ -518,6 +667,34 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
         front: ['skin', 'wax', 'jade', 'milk'],
     },
     organicos: { back: ['skinDetailed', 'eye', 'lips'], front: ['soap', 'ivory', 'motherOfPearl', 'snow'] },
+    pavimentos: {
+        back: ['asphaltFine', 'asphaltCoarse', 'asphaltCracked', 'concreteSlab'],
+        front: ['pavementPortuguese', 'grassPaver', 'paverHerringbone', 'stoneSetts'],
+        pattern: [6, 3],
+    },
+    vidros: {
+        back: ['glassGreen', 'glassBlue', 'glassAmber', 'glassFrosted'],
+        front: ['crystal', 'obsidian', 'amber'],
+        cut: ['crystal'],
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05 },
+    },
+    gemas: {
+        back: ['diamond', 'ruby', 'sapphire', 'emerald'],
+        front: ['aquamarine', 'topaz', 'garnet', 'peridot'],
+        cut: ['diamond', 'ruby', 'sapphire', 'emerald', 'aquamarine', 'topaz', 'garnet', 'peridot'],
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05 },
+    },
+    cristais: {
+        back: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
+        front: ['turquoise', 'lapisLazuli', 'malachite', 'opal', 'onyx'],
+        cut: ['quartz', 'amethyst', 'citrine', 'roseQuartz'],
+        tent: { gain: 1.6, ambient: 0.1, floor: 0.07, sun: 6, spark: 900, glare: 0.05 },
+    },
+    alvenaria: {
+        back: ['concreteBlock', 'stoneWall', 'stackedSlate', 'gravel'],
+        front: ['flagstone', 'cobblestone', 'bamboo'],
+        pattern: [4, 2],
+    },
 };
 
 /**
@@ -531,18 +708,32 @@ function showcase(family: Showcase): Shot {
         build(app) {
             const R = 0.6;
             const move = galleryCamera(app, 1.17);
-            const lights = studio(app);
-            directional(app, GALLERY_SUN, 1.5, true);
-            backdrop(app, -0.1, 0.12);
+            const tent = family.tent;
+            const lights = studio(app, tent?.gain ?? 1);
+            if (tent !== undefined) tentLights(app, tent);
+            directional(app, GALLERY_SUN, tent?.sun ?? 1.5, true);
+            backdrop(app, -0.1, tent?.floor ?? 0.12);
             const text = overlay(app);
             for (const [name, c] of rows(family.back, family.front, R, 1.45)) {
                 const displaced = SHOWCASE_RELIEF[name as MaterialName];
-                ball(app, {
+                if (family.cut?.includes(name as MaterialName) === true) {
+                    const cut = gem(app, name as MaterialName, c, R);
+                    registerPiece(app, name, cut, [c[0], c[1] + 0.2 * R, c[2]], R);
+                    text.label(name, anchor(c, R));
+                    continue;
+                }
+                const made = ball(app, {
                     name: name as MaterialName,
                     at: c,
                     radius: R,
+                    ...(SHOWCASE_PATTERN[name as MaterialName] !== undefined
+                        ? { values: { pattern_scale: [...SHOWCASE_PATTERN[name as MaterialName]!] } }
+                        : family.pattern !== undefined
+                          ? { values: { pattern_scale: [...family.pattern] } }
+                          : {}),
                     ...(displaced !== undefined ? { displaced, front: true } : {}),
                 });
+                registerPiece(app, name, made, c, R);
                 text.label(name, anchor(c, R));
             }
             return (i) => {
@@ -608,8 +799,117 @@ const FACE_ROSY: FaceLook = {
     flush: 1,
     lip: [0.45, 0.11, 0.12],
     lid: [0.88, 0.78, 0.76],
-    gloss: 0.5,
+    gloss: 0.75,
 };
+
+/** A forma dos lábios no rosto (unidades do objeto) e os valores do relevo deles, comuns ao material e à geometria. */
+// A lente dos lábios: a meia altura cai em parábola (`power` 2) do meio a zero nos cantos. O contorno é definido: a
+// máscara vale 1 até `soft` da altura e 0 no fim dela. Os sulcos ficam dentro: o relevo deles some antes da borda,
+// entre `core.from` e `core.to` da altura.
+const LIP_SHAPE = {
+    reach: 0.162,
+    up: 0.066,
+    down: 0.071,
+    soft: 0.88,
+    power: 2,
+    core: { from: 0.55, to: 0.84 },
+    bow: { dip: 0.2, half: 0.045 },
+};
+const LIP_RELIEF = {
+    scale: FACE_SCALE,
+    // Os vincos em leque, curvos, a partir do meio da boca.
+    centre: [...facePoint(0, 6.6, 1.58)],
+    fan: 140,
+    // O tubérculo: o volume de pregas embaralhadas no meio do lábio superior.
+    tubercle: [0, 0.03, 0.02],
+    tubercle_radius: 0.045,
+    tubercle_height: 0.35,
+};
+
+/**
+ * A máscara dos lábios (1 dentro, 0 fora) sobre a posição `position` (a saída de um nó), posta em `graph` e `links`;
+ * devolve a saída. A mesma no material (onde mistura os lábios à pele) e na geometria (onde limita o relevo).
+ */
+function lipLens(
+    graph: Record<string, unknown>,
+    links: [string, string][],
+    position: string,
+): { readonly mask: string; readonly core: string } {
+    // Os lábios: uma lente em volta da linha da boca — a meia altura cai em parábola do meio (`up` acima, `down`
+    // abaixo) a zero nos cantos (`reach`, a meia largura): o material afina até o canto da boca.
+    // `bow`: o arco do cupido — o contorno de cima desce `bow.dip` (fração) no meio, numa meia largura `bow.half`.
+    const lipShape = LIP_SHAPE;
+    graph.lip_c = nodes.math.value3.with({ value: [...facePoint(0, 6.6, 1.58)] });
+    graph.lip_rel = nodes.math.sub3;
+    graph.lip_axes = nodes.math.split3;
+    graph.lip_ax = nodes.math.abs;
+    graph.lip_ay = nodes.math.abs;
+    graph.lip_reach = nodes.math.value.with({ value: lipShape.reach });
+    graph.lip_u = nodes.math.div;
+    graph.lip_power = nodes.math.value.with({ value: lipShape.power });
+    graph.lip_u2 = nodes.math.pow;
+    graph.lip_taper = nodes.map.range.with({ in_min: 1, in_max: 0, out_min: 1e-4, out_max: 1 });
+    graph.lip_bow = nodes.map.range.with({
+        in_min: lipShape.bow.half,
+        in_max: 0,
+        out_min: lipShape.up,
+        out_max: lipShape.up * (1 - lipShape.bow.dip),
+    });
+    graph.lip_down = nodes.math.value.with({ value: lipShape.down });
+    graph.lip_above = nodes.map.range.with({ in_min: -0.003, in_max: 0.003, out_min: 0, out_max: 1 });
+    graph.lip_tall = nodes.math.mix;
+    graph.lip_h = nodes.math.mul;
+    graph.lip_t = nodes.math.div;
+    graph.lip_in = nodes.map.range.with({ in_min: 1, in_max: lipShape.soft, out_min: 0, out_max: 1 });
+    // Só a frente da cabeça (a lente é um prisma ao longo de z).
+    graph.lip_front = nodes.map.range.with({ in_min: -0.3, in_max: -0.2, out_min: 0, out_max: 1 });
+    // A ponta some aos poucos no canto.
+    graph.lip_end = nodes.map.range.with({ in_min: 1, in_max: 0.7, out_min: 0, out_max: 1 });
+    graph.lip_body = nodes.math.mul;
+    graph.lips = nodes.math.mul;
+    // O miolo: onde o relevo dos sulcos vale (1), sumindo antes da borda da máscara.
+    graph.lip_inner = nodes.map.range.with({
+        in_min: lipShape.core.to,
+        in_max: lipShape.core.from,
+        out_min: 0,
+        out_max: 1,
+    });
+    graph.lip_core = nodes.math.mul;
+    links.push(
+        [position, 'lip_rel.a'],
+        ['lip_c.value', 'lip_rel.b'],
+        ['lip_rel.value', 'lip_axes.v'],
+        ['lip_axes.x', 'lip_ax.x'],
+        ['lip_axes.y', 'lip_ay.x'],
+        ['lip_ax.value', 'lip_u.a'],
+        ['lip_reach.value', 'lip_u.b'],
+        ['lip_u.value', 'lip_u2.x'],
+        ['lip_power.value', 'lip_u2.e'],
+        ['lip_u2.value', 'lip_taper.x'],
+        ['lip_ax.value', 'lip_bow.x'],
+        ['lip_axes.y', 'lip_above.x'],
+        ['lip_down.value', 'lip_tall.a'],
+        ['lip_bow.value', 'lip_tall.b'],
+        ['lip_above.value', 'lip_tall.t'],
+        ['lip_tall.value', 'lip_h.a'],
+        ['lip_taper.value', 'lip_h.b'],
+        ['lip_ay.value', 'lip_t.a'],
+        ['lip_h.value', 'lip_t.b'],
+        ['lip_t.value', 'lip_in.x'],
+        ['lip_axes.z', 'lip_front.x'],
+        ['lip_u2.value', 'lip_end.x'],
+        ['lip_in.value', 'lip_body.a'],
+        ['lip_end.value', 'lip_body.b'],
+        ['lip_body.value', 'lips.a'],
+        ['lip_front.value', 'lips.b'],
+    );
+    links.push(
+        ['lip_t.value', 'lip_inner.x'],
+        ['lip_inner.value', 'lip_core.a'],
+        ['lips.value', 'lip_core.b'],
+    );
+    return { mask: 'lips.value', core: 'lip_core.value' };
+}
 
 function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction {
     const graph: Record<string, unknown> = {
@@ -667,7 +967,7 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
     const earL = blob('ear_l', facePoint(0.85, 7.2, 0.35), 0.06, 0.26);
     const earR = blob('ear_r', facePoint(-0.85, 7.2, 0.35), 0.06, 0.26);
     const brow = blob('brow', facePoint(0, 7.85, 1.4), 0.1, 0.42);
-    const lips = blob('lips', facePoint(0, 6.6, 1.58), 0.13, 0.19, [1, 3.1, 1]);
+    const { mask: lips, core: lipCore } = lipLens(graph, links, 's.object_position');
     // O contorno dos olhos: a pele fina das pálpebras, mais vermelha e mais escura.
     const socketL = blob('socket_l', facePoint(0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
     const socketR = blob('socket_r', facePoint(-0.31, 7.27, 1.3), 0.07, 0.2, [1, 1.5, 1]);
@@ -771,10 +1071,22 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
     graph.lid_sum = nodes.math.max;
     graph.lid = nodes.math.mix3;
     // Os lábios são outro material (`lips`): misturado à pele pela máscara deles.
+    // O relevo dos sulcos só no miolo dos lábios: cada altura do material multiplicada pela máscara do miolo.
+    const lipHeights = [
+        ['line_height', 0.07],
+        ['fold_height', 0.28],
+        ['network_height', 0.12],
+        ['hatch_height', 0.14],
+        ['tubercle_height', LIP_RELIEF.tubercle_height],
+    ] as const;
+    lipHeights.forEach(([, value], i) => {
+        graph[`lip_height_${i}`] = nodes.math.value.with({ value });
+        graph[`lip_scaled_${i}`] = nodes.math.mul;
+    });
     graph.mouth = nodes.material.lips.with({
-        scale: FACE_SCALE,
         color: [...look.lip],
         gloss: look.gloss,
+        ...LIP_RELIEF,
     });
     graph.face = nodes.closure.mix;
     links.push(
@@ -787,6 +1099,11 @@ function faceSkin(values: Values, look: FaceLook = FACE_ROSY): MaterialFunction 
         ['skin.value', 'face.a'],
         ['mouth.value', 'face.b'],
         [lips, 'face.t'],
+        ...lipHeights.flatMap(([name], i): [string, string][] => [
+            [`lip_height_${i}.value`, `lip_scaled_${i}.a`],
+            [lipCore, `lip_scaled_${i}.b`],
+            [`lip_scaled_${i}.value`, `mouth.${name}`],
+        ]),
     );
     return materialGraph(graph as Parameters<typeof materialGraph>[0], links, 'face.value');
 }
@@ -832,7 +1149,7 @@ function face(app: Application, fn: MaterialFunction, iris: Values, soft = false
             });
             if (!soft) {
                 app.world.insert(
-                    mesh
+                    displacedFace(mesh)
                         .add(new StandardMaterial())
                         .add(new Transform({ position: [0, lift, 0, 1] }))
                         .add(fn),
@@ -841,6 +1158,95 @@ function face(app: Application, fn: MaterialFunction, iris: Values, soft = false
             }
             app.world.insert(softFace(mesh).add(new StandardMaterial()).add(new Transform()).add(fn));
         });
+}
+
+/**
+ * A cabeça com o relevo dos lábios como geometria: a malha dividida `LIP_LEVELS` vezes só na região dos lábios
+ * (`MeshGeometry.refined`), levada a um grafo de conjunto (`meshSource`) e deslocada ao longo da normal pela altura do
+ * material dos lábios (`height.lips`, os mesmos padrões e valores), dentro da mesma máscara — o material segue
+ * inclinando a normal pelo que a malha não resolve.
+ */
+/** O degrau debaixo do lábio inferior, em altura abaixo da linha da boca (unidades do objeto, no meio da boca). */
+const LEDGE = { from: -0.044, at: -0.064, to: -0.092, depth: 0.007 };
+const LIP_LEVELS = 2;
+/** O passo da malha dos lábios depois da divisão (a aresta média de origem, 0,0054, pela metade a cada nível). */
+const LIP_STEP = 0.0054 / 2 ** LIP_LEVELS;
+function displacedFace(mesh: MeshGeometry): SetGraph {
+    const centre = facePoint(0, 6.6, 1.58);
+    const fine = mesh.refined(LIP_LEVELS, (x, y, z) => {
+        const u = Math.abs(x) / (LIP_SHAPE.reach * 1.05);
+        if (u >= 1 || z - centre[2] < -0.2) return false;
+        const tall = ((y > centre[1] ? LIP_SHAPE.up : LIP_SHAPE.down) * 1.15 + 0.02) * (1 - u ** LIP_SHAPE.power);
+        return Math.abs(y - centre[1]) < tall;
+    });
+    const graph: Record<string, unknown> = {
+        m: meshSource(fine.data),
+        p: graphArgument('position'),
+        h: nodes.height.lips.with({ ...LIP_RELIEF, width: LIP_STEP }),
+        masked: nodes.math.mul,
+        // Metade da altura vai para a geometria: na altura cheia os sulcos abrem entalhes de 1 mm na linha da boca.
+        half: nodes.math.value.with({ value: 0.5 }),
+        relief: nodes.math.mul,
+        // O degrau do modelo debaixo do lábio inferior (a base do MakeHuman desce 3 mm de uma vez, com a face virada
+        // para baixo: uma quina que pega sombra e parece uma curva em relevo): a frente do lábio recua aos poucos até
+        // a dobra do queixo. `t` é a altura abaixo da linha da boca pela largura da lente naquele x; o recuo cresce de
+        // `LEDGE.from` até `LEDGE.at` (o degrau) e some em `LEDGE.to`.
+        ledge_t: nodes.math.div,
+        ledge_rise: nodes.map.range.with({ in_min: LEDGE.from, in_max: LEDGE.at, out_min: 0, out_max: 1 }),
+        ledge_fall: nodes.map.range.with({ in_min: LEDGE.to, in_max: LEDGE.at, out_min: 0, out_max: 1 }),
+        ledge_up: nodes.math.smoothstep,
+        ledge_down: nodes.math.smoothstep,
+        ledge_tent: nodes.math.mul,
+        ledge_wide: nodes.math.mul,
+        ledge_front: nodes.math.mul,
+        ledge_depth: nodes.math.value.with({ value: -LEDGE.depth }),
+        ledge: nodes.math.mul,
+        // Duas etapas: o degrau remodela a forma e as normais são refeitas; depois os sulcos, sobre essas normais.
+        shape: nodes.set.displace,
+        smooth: nodes.set.recomputeNormals,
+        d: nodes.set.displace,
+        o: nodes.set.meshOutput,
+    };
+    const links: [string, string][] = [
+        ['m.mesh', 'shape.mesh'],
+        ['shape.mesh', 'smooth.mesh'],
+        ['smooth.mesh', 'd.mesh'],
+        ['p.value', 'h.position'],
+        ['h.value', 'masked.a'],
+    ];
+    const { core: lens } = lipLens(graph, links, 'p.value');
+    links.push(
+        [lens, 'masked.b'],
+        ['masked.value', 'relief.a'],
+        ['half.value', 'relief.b'],
+        ['lip_axes.y', 'ledge_t.a'],
+        ['lip_taper.value', 'ledge_t.b'],
+        ['ledge_t.value', 'ledge_rise.x'],
+        ['ledge_t.value', 'ledge_fall.x'],
+        ['ledge_rise.value', 'ledge_up.x'],
+        ['ledge_fall.value', 'ledge_down.x'],
+        ['ledge_up.value', 'ledge_tent.a'],
+        ['ledge_down.value', 'ledge_tent.b'],
+        ['ledge_tent.value', 'ledge_wide.a'],
+        ['lip_taper.value', 'ledge_wide.b'],
+        ['ledge_wide.value', 'ledge_front.a'],
+        ['lip_front.value', 'ledge_front.b'],
+        ['ledge_front.value', 'ledge.a'],
+        ['ledge_depth.value', 'ledge.b'],
+        ['ledge.value', 'shape.height'],
+        ['relief.value', 'd.height'],
+        ['d.mesh', 'o.mesh'],
+    );
+    const set = new SetGraph({
+        graph: new NodeGraph({ nodes: graph, links } as ConstructorParameters<typeof NodeGraph>[0]),
+    });
+    set.add(
+        new GraphGeometry({
+            vertexCapacity: fine.data.vertexCount,
+            indexCapacity: fine.data.indexCount,
+        }),
+    );
+    return set;
 }
 
 /**
@@ -917,7 +1323,7 @@ function softFace(mesh: MeshGeometry): SoftBody {
 function faceShot(
     skin: Values,
     iris: Values = {},
-    close: boolean | 'eye' = false,
+    close: boolean | 'eye' | 'mouth' = false,
     hard = false,
     look: FaceLook = FACE_ROSY,
     /** `bounce`: a iluminação global com a coleta na tela (a luz rebatida de perto); `soft`: a cabeça de corpo mole. */
@@ -928,10 +1334,23 @@ function faceShot(
         warmup: WARMUP,
         build(app) {
             const at = FACE_EYES[1]!;
+            const mouth = facePoint(0, 6.6, 1.58);
             const target: Vec3 =
-                close === 'eye' ? [at[0], at[1] - 0.1, at[2]] : close ? [0, 0.72, 0.3] : [0, 0.8, 0];
+                close === 'eye'
+                    ? [at[0], at[1] - 0.1, at[2]]
+                    : close === 'mouth'
+                      ? [mouth[0], mouth[1] - 0.1, mouth[2]]
+                      : close
+                        ? [0, 0.72, 0.3]
+                        : [0, 0.8, 0];
             const arm: Vec3 =
-                close === 'eye' ? [0, 0.02, 0.8] : close ? [0, 0.05, 2.1] : [0, 0.15, 4.6];
+                close === 'mouth'
+                    ? [0, 0.02, 0.5]
+                    : close === 'eye'
+                      ? [0, 0.02, 0.8]
+                      : close
+                      ? [0, 0.05, 2.1]
+                      : [0, 0.15, 4.6];
             const eye = (a: number): Vec3 => {
                 const r = turn(arm, a);
                 return [target[0] + r[0], target[1] + r[1], target[2] + r[2]];
@@ -1052,9 +1471,17 @@ export function materialStage(app: Application, name: MaterialName): MaterialSta
         }),
     );
     app.world.insert(camera);
-    studio(app);
-    directional(app, GALLERY_SUN, 1.5, true);
-    backdrop(app, -0.1, 0.12);
+    // A mesma luz da vitrine da família (a tenda dos metais e das gemas) e a mesma peça (a gema lapidada).
+    const family = familyOf(name);
+    const tent = family?.tent;
+    studio(app, tent?.gain ?? 1);
+    if (tent !== undefined) tentLights(app, tent);
+    directional(app, GALLERY_SUN, tent?.sun ?? 1.5, true);
+    backdrop(app, -0.1, tent?.floor ?? 0.12);
+    if (family?.cut?.includes(name) === true) {
+        const made = gem(app, name, [0, R - 0.1, 0], R);
+        return { ...made, staged: galleryValues(name, [2, 1], R), camera, eye, target };
+    }
     const displaced = SHOWCASE_RELIEF[name];
     const piece: Piece = {
         name,
@@ -1109,6 +1536,7 @@ export const MATERIAL_SHOTS: Record<string, Shot> = {
     'pele-rosto-luz-dura': faceShot({}, {}, true, true),
     'pele-rosto-perto': faceShot({}, {}, true),
     'olho-perto': faceShot({}, {}, 'eye'),
+    'boca-perto': faceShot({}, {}, 'mouth'),
     // A pele pela foto de um rosto real: mais escura e oliva, pouca vermelhidão, o brilho largo, os lábios apagados, o
     // contorno dos olhos acastanhado, a esclera cinza-bege e a íris quase preta.
     'pele-rosto-foto': faceShot(FOTO_SKIN, FOTO_EYE, false, false, FOTO_LOOK),

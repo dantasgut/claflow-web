@@ -5,6 +5,7 @@ import { FpsCounter, ScenePanel } from './ScenePanel';
 import type { MaterialName } from 'clayflow/web';
 import { MaterialGallery } from './MaterialGallery';
 import { MATERIAL_FAMILIES } from './scenes/materiais';
+import { ShowcasePanel } from './ShowcasePanel';
 import { TimeControls } from './TimeControls';
 import { TimeNavigator } from './TimeNavigator';
 
@@ -56,6 +57,8 @@ function ScenePlayer({ name }: { readonly name: string }) {
     const hostRef = useRef<HTMLDivElement>(null);
     const [error, setError] = useState<string | null>(null);
     const [running, setRunning] = useState<Application | null>(null);
+    // O canvas do motor em uso: o painel da vitrine acha a peça clicada nele.
+    const [surface, setSurface] = useState<HTMLCanvasElement | null>(null);
     const [nav, setNav] = useState<TimeNavigator | null>(null);
     useEffect(() => {
         const host = hostRef.current;
@@ -83,6 +86,7 @@ function ScenePlayer({ name }: { readonly name: string }) {
                 const navigator = new TimeNavigator(created, shot.build(created), shot.frames);
                 created.start();
                 setRunning(created);
+                setSurface(canvas);
                 setNav(navigator);
             } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
@@ -91,6 +95,7 @@ function ScenePlayer({ name }: { readonly name: string }) {
         return () => {
             disposed = true;
             setRunning(null);
+            setSurface(null);
             setNav(null);
             app?.dispose();
             canvas.remove();
@@ -101,6 +106,9 @@ function ScenePlayer({ name }: { readonly name: string }) {
             <div ref={hostRef} />
             {running !== null && <FpsCounter app={running} />}
             {running !== null && <ScenePanel app={running} />}
+            {running !== null && surface !== null && name.startsWith('vitrine-') && (
+                <ShowcasePanel app={running} canvas={surface} family={name.slice('vitrine-'.length)} />
+            )}
             {nav !== null && <TimeControls nav={nav} />}
             {error !== null && <pre style={{ color: '#f66' }}>{error}</pre>}
         </div>

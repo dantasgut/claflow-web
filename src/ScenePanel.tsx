@@ -1,6 +1,8 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import * as clayflow from 'clayflow/web';
 import type { Application } from 'clayflow/web';
+import { FrameSizeControl } from './FrameSize';
+import { usePanel } from './panels';
 
 /** A taxa de quadros (canto superior direito): os quadros completos no último segundo. */
 export function FpsCounter({ app }: { readonly app: Application }) {
@@ -125,9 +127,15 @@ const engine = {
     },
 };
 
-/** O painel de parâmetros (canto superior esquerdo; `P` ou o título recolhe): refração, cáusticas, luz, ambiente, tom. */
+/**
+ * O painel de parâmetros (canto superior esquerdo; `P` ou o título recolhe), em dois grupos: "Render" (o que é do
+ * renderizador: refração, cáusticas, exposição, perfil e tempos por estágio) e "Luz da cena" (o que é da cena: a luz
+ * direcional e o céu). Cada grupo e cada seção recolhe e abre pelo título.
+ */
 export function ScenePanel({ app }: { readonly app: Application }) {
-    const [open, setOpen] = useState(true);
+    const [open, setOpen] = usePanel('render');
+    const openRef = useRef(open);
+    openRef.current = open;
     const [found, setFound] = useState<Found>(() => findInScene(app));
     const [, redraw] = useState(0);
     const refresh = () => redraw((n) => n + 1);
@@ -140,7 +148,7 @@ export function ScenePanel({ app }: { readonly app: Application }) {
             );
         }, 1000);
         const onKey = (e: KeyboardEvent) => {
-            if (e.code === 'KeyP') setOpen((o) => !o);
+            if (e.code === 'KeyP') setOpen(!openRef.current);
         };
         window.addEventListener('keydown', onKey);
         return () => {
@@ -156,150 +164,155 @@ export function ScenePanel({ app }: { readonly app: Application }) {
 
     return (
         <div style={styles.panel}>
-            <div style={styles.title} onClick={() => setOpen((o) => !o)}>
+            <div style={styles.title} onClick={() => setOpen(!open)}>
                 {open ? '▾' : '▸'} Parâmetros <span style={styles.hint}>(P)</span>
             </div>
             {open && (
                 <>
-                    <Section title="Refração">
-                        <Toggle
-                            label="ligada"
-                            value={renderer.lightPaths.refraction}
-                            set={(v) => {
-                                engine.refraction(app, v);
-                                refresh();
-                            }}
-                        />
-                        <Slider
-                            label="interfaces por caminho"
-                            min={1}
-                            max={32}
-                            step={1}
-                            value={renderer.lightPaths.transmission}
-                            set={(v) => {
-                                engine.interfaces(app, v);
-                                refresh();
-                            }}
-                        />
-                        <Toggle
-                            label="filtro do sinal traçado"
-                            value={app.defaults.renderer.temporalFilter.enabled}
-                            set={(v) => {
-                                engine.denoise(app, v);
-                                refresh();
-                            }}
-                        />
-                    </Section>
-                    <Section title="Cáusticas">
-                        {caustics === undefined ? (
-                            <div style={styles.hint}>sem cáusticas na cena</div>
-                        ) : (
-                            <>
-                                <Toggle
-                                    label="ligadas"
-                                    value={caustics.enabled}
-                                    set={(v) => {
-                                        engine.caustics(caustics, v);
-                                        refresh();
-                                    }}
-                                />
-                                <div style={styles.hint}>{caustics.photons.toLocaleString('pt-BR')} fótons por quadro</div>
-                            </>
-                        )}
-                    </Section>
-                    <Section title="Luz direcional">
-                        {sun === undefined ? (
-                            <div style={styles.hint}>sem luz direcional na cena</div>
-                        ) : (
-                            <>
-                                <Slider
-                                    label="intensidade (× a da cena)"
-                                    min={0}
-                                    max={4}
-                                    step={0.05}
-                                    value={sun.data.intensity / initialOf(sun, sun.data.intensity)}
-                                    set={(v) => {
-                                        engine.sunIntensity(sun, v * initialOf(sun, sun.data.intensity));
-                                        refresh();
-                                    }}
-                                />
-                                <Slider
-                                    label="azimute (°)"
-                                    min={0}
-                                    max={360}
-                                    step={1}
-                                    value={azimuth}
-                                    set={(v) => {
-                                        engine.sunDirection(sun, v, elevation);
-                                        refresh();
-                                    }}
-                                />
-                                <Slider
-                                    label="elevação (°)"
-                                    min={5}
-                                    max={90}
-                                    step={1}
-                                    value={elevation}
-                                    set={(v) => {
-                                        engine.sunDirection(sun, azimuth, v);
-                                        refresh();
-                                    }}
-                                />
-                            </>
-                        )}
-                    </Section>
-                    <Section title="Ambiente">
-                        <Slider
-                            label="intensidade do céu (× a da cena)"
-                            min={0}
-                            max={4}
-                            step={0.05}
-                            value={ambient.data.intensity / initialOf(ambient, ambient.data.intensity)}
-                            set={(v) => {
-                                engine.sky(app, v * initialOf(ambient, ambient.data.intensity));
-                                refresh();
-                            }}
-                        />
-                        <Toggle
-                            label="céu ao fundo"
-                            value={ambient.background}
-                            set={(v) => {
-                                engine.background(app, v);
-                                refresh();
-                            }}
-                        />
-                    </Section>
-                    <Section title="Imagem">
-                        <Slider
-                            label="exposição (EV, + a da cena)"
-                            min={-4}
-                            max={4}
-                            step={0.1}
-                            value={presentation.data.exposure - baseExposureOf(presentation)}
-                            set={(v) => {
-                                engine.exposure(app, v + baseExposureOf(presentation));
-                                refresh();
-                            }}
-                        />
-                    </Section>
-                    <Section title="Desempenho">
-                        <label style={styles.row}>
-                            perfil
-                            <select
-                                value={renderer.profile}
-                                onChange={(e) => {
-                                    engine.profile(app, e.target.value as clayflow.RenderProfile);
+                    <Section group title="Render">
+                        <FrameSizeControl />
+                        <Section title="Refração">
+                            <Toggle
+                                label="ligada"
+                                value={renderer.lightPaths.refraction}
+                                set={(v) => {
+                                    engine.refraction(app, v);
                                     refresh();
                                 }}
-                            >
-                                <option value="high">alto</option>
-                                <option value="medium">médio</option>
-                                <option value="low">baixo</option>
-                            </select>
-                        </label>
-                        <StageTimes app={app} />
+                            />
+                            <Slider
+                                label="interfaces por caminho"
+                                min={1}
+                                max={32}
+                                step={1}
+                                value={renderer.lightPaths.transmission}
+                                set={(v) => {
+                                    engine.interfaces(app, v);
+                                    refresh();
+                                }}
+                            />
+                            <Toggle
+                                label="filtro do sinal traçado"
+                                value={app.defaults.renderer.temporalFilter.enabled}
+                                set={(v) => {
+                                    engine.denoise(app, v);
+                                    refresh();
+                                }}
+                            />
+                        </Section>
+                        <Section title="Cáusticas">
+                            {caustics === undefined ? (
+                                <div style={styles.hint}>sem cáusticas na cena</div>
+                            ) : (
+                                <>
+                                    <Toggle
+                                        label="ligadas"
+                                        value={caustics.enabled}
+                                        set={(v) => {
+                                            engine.caustics(caustics, v);
+                                            refresh();
+                                        }}
+                                    />
+                                    <div style={styles.hint}>{caustics.photons.toLocaleString('pt-BR')} fótons por quadro</div>
+                                </>
+                            )}
+                        </Section>
+                        <Section title="Imagem">
+                            <Slider
+                                label="exposição (EV, + a da cena)"
+                                min={-4}
+                                max={4}
+                                step={0.1}
+                                value={presentation.data.exposure - baseExposureOf(presentation)}
+                                set={(v) => {
+                                    engine.exposure(app, v + baseExposureOf(presentation));
+                                    refresh();
+                                }}
+                            />
+                        </Section>
+                        <Section title="Desempenho">
+                            <label style={styles.row}>
+                                perfil
+                                <select
+                                    value={renderer.profile}
+                                    onChange={(e) => {
+                                        engine.profile(app, e.target.value as clayflow.RenderProfile);
+                                        refresh();
+                                    }}
+                                >
+                                    <option value="high">alto</option>
+                                    <option value="medium">médio</option>
+                                    <option value="low">baixo</option>
+                                </select>
+                            </label>
+                            <StageTimes app={app} />
+                        </Section>
                     </Section>
-                    <div style={styles.hint}>Espaço: pausa · arrastar: girar · roda: aproximar</div>
+                    <Section group title="Luz da cena">
+                        <Section title="Luz direcional">
+                            {sun === undefined ? (
+                                <div style={styles.hint}>sem luz direcional na cena</div>
+                            ) : (
+                                <>
+                                    <Slider
+                                        label="intensidade (× a da cena)"
+                                        min={0}
+                                        max={4}
+                                        step={0.05}
+                                        value={sun.data.intensity / initialOf(sun, sun.data.intensity)}
+                                        set={(v) => {
+                                            engine.sunIntensity(sun, v * initialOf(sun, sun.data.intensity));
+                                            refresh();
+                                        }}
+                                    />
+                                    <Slider
+                                        label="azimute (°)"
+                                        min={0}
+                                        max={360}
+                                        step={1}
+                                        value={azimuth}
+                                        set={(v) => {
+                                            engine.sunDirection(sun, v, elevation);
+                                            refresh();
+                                        }}
+                                    />
+                                    <Slider
+                                        label="elevação (°)"
+                                        min={5}
+                                        max={90}
+                                        step={1}
+                                        value={elevation}
+                                        set={(v) => {
+                                            engine.sunDirection(sun, azimuth, v);
+                                            refresh();
+                                        }}
+                                    />
+                                </>
+                            )}
+                        </Section>
+                        <Section title="Céu">
+                            <Slider
+                                label="intensidade do céu (× a da cena)"
+                                min={0}
+                                max={4}
+                                step={0.05}
+                                value={ambient.data.intensity / initialOf(ambient, ambient.data.intensity)}
+                                set={(v) => {
+                                    engine.sky(app, v * initialOf(ambient, ambient.data.intensity));
+                                    refresh();
+                                }}
+                            />
+                            <Toggle
+                                label="céu ao fundo"
+                                value={ambient.background}
+                                set={(v) => {
+                                    engine.background(app, v);
+                                    refresh();
+                                }}
+                            />
+                        </Section>
+                    </Section>
+                    <div style={styles.hint}>Espaço: pausa · arrastar: girar · roda: aproximar · H: oculta ou mostra todos os painéis</div>
                 </>
             )}
         </div>
@@ -350,11 +363,29 @@ function StageTimes({ app }: { readonly app: Application }) {
     );
 }
 
-function Section({ title, children }: { readonly title: string; readonly children: ReactNode }) {
+/**
+ * Uma seção que recolhe e abre pelo título (▸/▾); `group` é o título de um grupo de seções. Recolhida, o conteúdo fica
+ * montado e escondido: o estado dos controles (a medida dos tempos por estágio ligada) não se perde.
+ */
+export function Section({
+    title,
+    group = false,
+    closed = false,
+    children,
+}: {
+    readonly title: string;
+    readonly group?: boolean;
+    /** Começa recolhida. */
+    readonly closed?: boolean;
+    readonly children: ReactNode;
+}) {
+    const [open, setOpen] = useState(!closed);
     return (
-        <div style={styles.section}>
-            <div style={styles.sectionTitle}>{title}</div>
-            {children}
+        <div style={group ? styles.group : styles.section}>
+            <div style={group ? styles.groupTitle : styles.sectionTitle} onClick={() => setOpen((o) => !o)}>
+                {open ? '▾' : '▸'} {title}
+            </div>
+            <div style={open ? (group ? styles.groupBody : undefined) : styles.hidden}>{children}</div>
         </div>
     );
 }
@@ -416,7 +447,7 @@ const styles = {
         top: 8,
         left: 8,
         width: 240,
-        maxHeight: 'calc(100vh - 16px)',
+        maxHeight: 'calc(100vh - 16px - var(--dock, 0px))',
         overflowY: 'auto',
         padding: '8px 10px',
         borderRadius: 6,
@@ -427,8 +458,12 @@ const styles = {
     },
     title: { fontWeight: 600, cursor: 'pointer', userSelect: 'none' },
     hint: { color: '#888', fontSize: 11, margin: '2px 0' },
-    section: { marginTop: 10 },
-    sectionTitle: { color: '#8cf', fontWeight: 600, marginBottom: 4 },
+    group: { marginTop: 10, borderTop: '1px solid rgba(255, 255, 255, 0.14)', paddingTop: 6 },
+    groupTitle: { color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', userSelect: 'none' },
+    groupBody: { paddingLeft: 8, borderLeft: '1px solid rgba(255, 255, 255, 0.1)', marginLeft: 3 },
+    hidden: { display: 'none' },
+    section: { marginTop: 8 },
+    sectionTitle: { color: '#8cf', fontWeight: 600, marginBottom: 4, cursor: 'pointer', userSelect: 'none' },
     row: { display: 'flex', gap: 6, alignItems: 'center', margin: '3px 0' },
     slider: { display: 'flex', flexDirection: 'column', margin: '4px 0' },
     sliderLabel: { display: 'flex', justifyContent: 'space-between' },
