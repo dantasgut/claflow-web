@@ -938,6 +938,8 @@ function face(app: Application, fn: MaterialFunction, iris: Values, soft = false
  * material dos lábios (`height.lips`, os mesmos padrões e valores), dentro da mesma máscara — o material segue
  * inclinando a normal pelo que a malha não resolve.
  */
+/** O degrau debaixo do lábio inferior, em altura abaixo da linha da boca (unidades do objeto, no meio da boca). */
+const LEDGE = { from: -0.044, at: -0.064, to: -0.092, depth: 0.007 };
 const LIP_LEVELS = 2;
 /** O passo da malha dos lábios depois da divisão (a aresta média de origem, 0,0054, pela metade a cada nível). */
 const LIP_STEP = 0.0054 / 2 ** LIP_LEVELS;
@@ -955,16 +957,58 @@ function displacedFace(mesh: MeshGeometry): SetGraph {
         h: nodes.height.lips.with({ ...LIP_RELIEF, width: LIP_STEP }),
         masked: nodes.math.mul,
         // Metade da altura vai para a geometria: na altura cheia os sulcos abrem entalhes de 1 mm na linha da boca.
-        d: nodes.set.displace.with({ scale: 0.5 }),
+        half: nodes.math.value.with({ value: 0.5 }),
+        relief: nodes.math.mul,
+        // O degrau do modelo debaixo do lábio inferior (a base do MakeHuman desce 3 mm de uma vez, com a face virada
+        // para baixo: uma quina que pega sombra e parece uma curva em relevo): a frente do lábio recua aos poucos até
+        // a dobra do queixo. `t` é a altura abaixo da linha da boca pela largura da lente naquele x; o recuo cresce de
+        // `LEDGE.from` até `LEDGE.at` (o degrau) e some em `LEDGE.to`.
+        ledge_t: nodes.math.div,
+        ledge_rise: nodes.map.range.with({ in_min: LEDGE.from, in_max: LEDGE.at, out_min: 0, out_max: 1 }),
+        ledge_fall: nodes.map.range.with({ in_min: LEDGE.to, in_max: LEDGE.at, out_min: 0, out_max: 1 }),
+        ledge_up: nodes.math.smoothstep,
+        ledge_down: nodes.math.smoothstep,
+        ledge_tent: nodes.math.mul,
+        ledge_wide: nodes.math.mul,
+        ledge_front: nodes.math.mul,
+        ledge_depth: nodes.math.value.with({ value: -LEDGE.depth }),
+        ledge: nodes.math.mul,
+        // Duas etapas: o degrau remodela a forma e as normais são refeitas; depois os sulcos, sobre essas normais.
+        shape: nodes.set.displace,
+        smooth: nodes.set.recomputeNormals,
+        d: nodes.set.displace,
         o: nodes.set.meshOutput,
     };
     const links: [string, string][] = [
-        ['m.mesh', 'd.mesh'],
+        ['m.mesh', 'shape.mesh'],
+        ['shape.mesh', 'smooth.mesh'],
+        ['smooth.mesh', 'd.mesh'],
         ['p.value', 'h.position'],
         ['h.value', 'masked.a'],
     ];
     const lens = lipLens(graph, links, 'p.value');
-    links.push([lens, 'masked.b'], ['masked.value', 'd.height'], ['d.mesh', 'o.mesh']);
+    links.push(
+        [lens, 'masked.b'],
+        ['masked.value', 'relief.a'],
+        ['half.value', 'relief.b'],
+        ['lip_axes.y', 'ledge_t.a'],
+        ['lip_taper.value', 'ledge_t.b'],
+        ['ledge_t.value', 'ledge_rise.x'],
+        ['ledge_t.value', 'ledge_fall.x'],
+        ['ledge_rise.value', 'ledge_up.x'],
+        ['ledge_fall.value', 'ledge_down.x'],
+        ['ledge_up.value', 'ledge_tent.a'],
+        ['ledge_down.value', 'ledge_tent.b'],
+        ['ledge_tent.value', 'ledge_wide.a'],
+        ['lip_taper.value', 'ledge_wide.b'],
+        ['ledge_wide.value', 'ledge_front.a'],
+        ['lip_front.value', 'ledge_front.b'],
+        ['ledge_front.value', 'ledge.a'],
+        ['ledge_depth.value', 'ledge.b'],
+        ['ledge.value', 'shape.height'],
+        ['relief.value', 'd.height'],
+        ['d.mesh', 'o.mesh'],
+    );
     const set = new SetGraph({
         graph: new NodeGraph({ nodes: graph, links } as ConstructorParameters<typeof NodeGraph>[0]),
     });
