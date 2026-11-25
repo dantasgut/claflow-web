@@ -35,6 +35,7 @@ import {
 import type { Application, MaterialFunction, MaterialName } from 'clayflow/web';
 import type { Shot } from './catalog';
 import { H, W } from './size';
+import { brilliantCut } from './support/gemCut';
 import { loadHdr } from './support/hdr';
 import { materialGraph } from './support/materialScenes';
 
@@ -505,58 +506,41 @@ const TENT_SPARKS: readonly Vec3[] = [
     [-3.1, 3.1, -0.8],
 ];
 
+/** A tenda de luz de uma família (ver `Showcase.tent`). */
+type Tent = NonNullable<Showcase['tent']>;
+
 /**
- * O corte brilhante redondo, de facetas planas (cada triângulo com os seus vértices e a normal da face): a mesa
- * octogonal (53 % do diâmetro), a coroa de 24 facetas (ângulo de 34,5°: altura de 16,2 % do diâmetro), a cintura de 16
- * lados e o pavilhão de 16 facetas até a culaça (40,75°: profundidade de 43,1 %) — as proporções de Tolkowsky.
+ * Monta a tenda de luz: a luz do ambiente, as luzes pequenas e muito fortes (o ponto de luz no metal polido, a faísca
+ * na faceta) e o espalhamento da lente, que faz o clarão em volta do que é muito mais forte que o resto da imagem.
  */
-function brilliant(radius: number): MeshGeometry {
-    const table = Array.from({ length: 8 }, (_, i): Vec3 => {
-        const a = (i * Math.PI) / 4;
-        return [0.53 * Math.cos(a), 0.324, 0.53 * Math.sin(a)];
-    });
-    const girdle = Array.from({ length: 16 }, (_, j): Vec3 => {
-        const a = (j * Math.PI) / 8;
-        return [Math.cos(a), 0, Math.sin(a)];
-    });
-    const top: Vec3 = [0, 0.324, 0];
-    const culet: Vec3 = [0, -0.862, 0];
-    const faces: [Vec3, Vec3, Vec3][] = [];
-    for (let i = 0; i < 8; i++) {
-        const t = table[i]!;
-        const next = table[(i + 1) % 8]!;
-        const g = (k: number): Vec3 => girdle[(2 * i + k + 16) % 16]!;
-        faces.push([top, t, next], [t, g(-1), g(0)], [t, g(0), g(1)], [t, g(1), next]);
+function tentLights(app: Application, tent: Tent): void {
+    app.defaults.ambient.data.intensity = tent.ambient;
+    for (const at of TENT_SPARKS) {
+        const aim = unit3(sub3(GALLERY_PANEL_TARGET, at));
+        app.world.insert(
+            new RectLight({
+                position: [...at, 1],
+                direction: [...aim, 0],
+                right: cross3(aim, [0, 1, 0]),
+                size: [0.22, 0.22],
+                intensity: tent.spark,
+            }),
+        );
     }
-    for (let j = 0; j < 16; j++) faces.push([girdle[j]!, girdle[(j + 1) % 16]!, culet]);
-    const positions: number[] = [];
-    const normals: number[] = [];
-    const indices: number[] = [];
-    const inside: Vec3 = [0, -0.2, 0];
-    for (const [a, b, c] of faces) {
-        let n = unit3(cross3(sub3(b, a), sub3(c, a)));
-        const out = sub3(a, inside);
-        const flip = n[0] * out[0] + n[1] * out[1] + n[2] * out[2] < 0;
-        if (flip) n = [-n[0], -n[1], -n[2]];
-        const k = positions.length / 3;
-        for (const p of flip ? [a, c, b] : [a, b, c]) {
-            positions.push(p[0] * radius, p[1] * radius, p[2] * radius);
-            normals.push(n[0], n[1], n[2]);
-        }
-        indices.push(k, k + 1, k + 2);
-    }
-    return new MeshGeometry({
-        positions: new Float32Array(positions),
-        indices: new Uint32Array(indices),
-        normals: new Float32Array(normals),
-    });
+    app.defaults.post.addEffect(new Bloom({ strength: tent.glare }));
+}
+
+/** A família da vitrine a que o material pertence (a tenda de luz e a lapidação valem também na galeria dele). */
+function familyOf(name: MaterialName): Showcase | undefined {
+    return Object.values(SHOWCASE).find((f) => f.back.includes(name) || f.front.includes(name));
 }
 
 /** Põe uma gema lapidada na cena: a mesa inclinada para a câmera, a culaça acima do chão. */
-function gem(app: Application, name: MaterialName, at: Vec3, radius: number): void {
+function gem(app: Application, name: MaterialName, at: Vec3, radius: number): { material: Valued } {
     const lean = 0.5;
+    const material = Materials[name](galleryValues(name, [2, 1], radius));
     app.world.insert(
-        brilliant(radius)
+        brilliantCut(radius)
             .add(new StandardMaterial())
             .add(
                 new Transform({
@@ -564,8 +548,45 @@ function gem(app: Application, name: MaterialName, at: Vec3, radius: number): vo
                     rotation: [Math.sin(lean / 2), 0, 0, Math.cos(lean / 2)],
                 }),
             )
-            .add(Materials[name](galleryValues(name, [2, 1], radius))),
+            .add(material),
     );
+    return { material: material as unknown as Valued };
+}
+
+/** Uma peça da vitrine para o painel do app: as funções (os valores mudam ao vivo), os valores da montagem e o lugar. */
+export interface ShowcasePiece {
+    readonly material: Valued;
+    readonly displacement?: Valued;
+    /** Os valores com que a vitrine montou o material (todos os parâmetros, lidos na inserção). */
+    readonly staged: Values;
+    readonly at: Vec3;
+    readonly radius: number;
+}
+
+const SHOWCASE_PIECES = new WeakMap<Application, Map<string, ShowcasePiece>>();
+
+/** As peças que a vitrine inseriu em `app` (nome do material → a peça); vazio fora das cenas `vitrine-*`. */
+export function showcasePieces(app: Application): ReadonlyMap<string, ShowcasePiece> {
+    return SHOWCASE_PIECES.get(app) ?? new Map();
+}
+
+/** Registra uma peça da vitrine, com os valores do material como estão na inserção. */
+function registerPiece(
+    app: Application,
+    name: string,
+    made: { material: Valued; displacement?: Valued },
+    at: Vec3,
+    radius: number,
+): void {
+    const staged: Values = {};
+    for (const key of Object.keys(made.material.params)) {
+        const v = made.material.values[key];
+        if (typeof v === 'number') staged[key] = v;
+        else if (Array.isArray(v)) staged[key] = [...(v as number[])];
+    }
+    let pieces = SHOWCASE_PIECES.get(app);
+    if (pieces === undefined) SHOWCASE_PIECES.set(app, (pieces = new Map()));
+    pieces.set(name, { ...made, staged, at, radius });
 }
 
 /** As peças da vitrine com o relevo na geometria (as outras: a esfera pronta, o relevo na normal). */
@@ -682,35 +703,19 @@ function showcase(family: Showcase): Shot {
             const move = galleryCamera(app, 1.17);
             const tent = family.tent;
             const lights = studio(app, tent?.gain ?? 1);
-            if (tent !== undefined) {
-                app.defaults.ambient.data.intensity = tent.ambient;
-                // Os realces vivos: luzes pequenas e muito fortes (o ponto de luz no metal polido, a faísca na faceta) e
-                // o espalhamento da lente, que faz o clarão em volta do que é muito mais forte que o resto da imagem.
-                for (const at of TENT_SPARKS) {
-                    const aim = unit3(sub3(GALLERY_PANEL_TARGET, at));
-                    app.world.insert(
-                        new RectLight({
-                            position: [...at, 1],
-                            direction: [...aim, 0],
-                            right: cross3(aim, [0, 1, 0]),
-                            size: [0.22, 0.22],
-                            intensity: tent.spark,
-                        }),
-                    );
-                }
-                app.defaults.post.addEffect(new Bloom({ strength: tent.glare }));
-            }
+            if (tent !== undefined) tentLights(app, tent);
             directional(app, GALLERY_SUN, tent?.sun ?? 1.5, true);
             backdrop(app, -0.1, tent?.floor ?? 0.12);
             const text = overlay(app);
             for (const [name, c] of rows(family.back, family.front, R, 1.45)) {
                 const displaced = SHOWCASE_RELIEF[name as MaterialName];
                 if (family.cut?.includes(name as MaterialName) === true) {
-                    gem(app, name as MaterialName, c, R);
+                    const cut = gem(app, name as MaterialName, c, R);
+                    registerPiece(app, name, cut, [c[0], c[1] + 0.2 * R, c[2]], R);
                     text.label(name, anchor(c, R));
                     continue;
                 }
-                ball(app, {
+                const made = ball(app, {
                     name: name as MaterialName,
                     at: c,
                     radius: R,
@@ -721,6 +726,7 @@ function showcase(family: Showcase): Shot {
                           : {}),
                     ...(displaced !== undefined ? { displaced, front: true } : {}),
                 });
+                registerPiece(app, name, made, c, R);
                 text.label(name, anchor(c, R));
             }
             return (i) => {
@@ -1458,9 +1464,17 @@ export function materialStage(app: Application, name: MaterialName): MaterialSta
         }),
     );
     app.world.insert(camera);
-    studio(app);
-    directional(app, GALLERY_SUN, 1.5, true);
-    backdrop(app, -0.1, 0.12);
+    // A mesma luz da vitrine da família (a tenda dos metais e das gemas) e a mesma peça (a gema lapidada).
+    const family = familyOf(name);
+    const tent = family?.tent;
+    studio(app, tent?.gain ?? 1);
+    if (tent !== undefined) tentLights(app, tent);
+    directional(app, GALLERY_SUN, tent?.sun ?? 1.5, true);
+    backdrop(app, -0.1, tent?.floor ?? 0.12);
+    if (family?.cut?.includes(name) === true) {
+        const made = gem(app, name, [0, R - 0.1, 0], R);
+        return { ...made, staged: galleryValues(name, [2, 1], R), camera, eye, target };
+    }
     const displaced = SHOWCASE_RELIEF[name];
     const piece: Piece = {
         name,
