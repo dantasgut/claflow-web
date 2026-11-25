@@ -170,6 +170,7 @@ export function ScenePanel({ app }: { readonly app: Application }) {
             {open && (
                 <>
                     <Section group title="Render">
+                        <FrameSizeControl />
                         <Section title="Refração">
                             <Toggle
                                 label="ligada"
@@ -217,7 +218,6 @@ export function ScenePanel({ app }: { readonly app: Application }) {
                             )}
                         </Section>
                         <Section title="Imagem">
-                            <FrameSizeControl />
                             <Slider
                                 label="exposição (EV, + a da cena)"
                                 min={-4}
