@@ -491,7 +491,7 @@ const SHOWCASE: Readonly<Record<string, Showcase>> = {
     },
     'metais-acabados': {
         back: ['castIron', 'bronzePatina', 'metalOxidized', 'carbonFiber'],
-        front: ['carPaint', 'carPaintSilver', 'carPaintFlake'],
+        front: ['carPaint', 'carPaintSilver', 'carPaintFlake', 'goldLeaf'],
     },
     madeiras: {
         back: ['woodPine', 'woodOak', 'woodWalnut', 'woodMahogany'],
