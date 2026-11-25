@@ -137,17 +137,29 @@ export class TimeNavigator {
         this.changed();
     }
 
-    /** O movimento da cena no quadro do tempo; com a câmera livre, a pose dela (a do controle) fica. */
+    /**
+     * O movimento da cena no quadro do tempo. Com a câmera livre, o roteiro da cena segue movendo o resto (as luzes, as
+     * peças), mas o que ele escreve na câmera vai para um rascunho: a pose dela tem um dono só, o controle livre (antes
+     * o roteiro escrevia a pose dele e ela era desfeita no mesmo quadro: duas mudanças de câmera por quadro).
+     */
     private tick(): void {
         const camera = this.free === undefined ? undefined : findCamera(this.app);
-        const pose = camera && {
-            position: [...camera.transform.data.position],
-            rotation: [...camera.transform.data.rotation],
-        };
-        this.update(this.position);
-        if (camera !== undefined && pose !== undefined) {
-            camera.transform.data.position = pose.position;
-            camera.transform.data.rotation = pose.rotation;
+        if (camera === undefined) {
+            this.update(this.position);
+            return;
+        }
+        const live = camera.transform.data;
+        const draft = { ...live, position: [...live.position], rotation: [...live.rotation] };
+        Object.defineProperty(camera.transform, 'data', {
+            configurable: true,
+            get: () => draft,
+            set: () => undefined,
+        });
+        try {
+            this.update(this.position);
+        } finally {
+            // Tira o rascunho: volta o acessor do motor (o do protótipo).
+            delete (camera.transform as { data?: unknown }).data;
         }
     }
 
