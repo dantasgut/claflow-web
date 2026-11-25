@@ -1008,9 +1008,11 @@ function faceShot(
                         ? [0, 0.72, 0.3]
                         : [0, 0.8, 0];
             const arm: Vec3 =
-                close === 'eye' || close === 'mouth'
-                    ? [0, 0.02, 0.8]
-                    : close
+                close === 'mouth'
+                    ? [0, 0.02, 0.5]
+                    : close === 'eye'
+                      ? [0, 0.02, 0.8]
+                      : close
                       ? [0, 0.05, 2.1]
                       : [0, 0.15, 4.6];
             const eye = (a: number): Vec3 => {
